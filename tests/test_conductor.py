@@ -80,11 +80,18 @@ async def test_define_task(client: Client):
 async def test_complete_task(client: Client):
     """Tests the complete_task tool."""
     await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
-    await client.call_tool("define_task", {"id": "task1", "description": "Test Task", "objective_id": "obj1"})
+    await client.call_tool("define_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
+    await client.call_tool("define_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1", "prerequisites": ["task1"]})
 
-    # Test completing an existing task
+    # Test completing an existing task, which should now return a combined message.
     result = await client.call_tool("complete_task", {"task_id": "task1"})
-    assert result[0].text == "Task 'task1' marked as completed."  # type: ignore
+    assert "Task 'task1' marked as completed." in result[0].text  # type: ignore
+    assert "Next task for objective 'obj1': task2 - Task 2" in result[0].text  # type: ignore
+
+    # Test completing the final task, which should return the objective completion message.
+    result_final = await client.call_tool("complete_task", {"task_id": "task2"})
+    assert "Task 'task2' marked as completed." in result_final[0].text  # type: ignore
+    assert "Objective 'obj1' is completed" in result_final[0].text  # type: ignore
 
     # Test completing a non-existent task
     result_no_task = await client.call_tool("complete_task", {"task_id": "nonexistent"})
@@ -197,11 +204,11 @@ async def test_full_workflow(client: Client):
     Tests the full workflow from objective creation to completion as an
     integration test.
     """
-    # 1. Add the main objective
+    # 1. Define the main objective
     add_obj_result = await client.call_tool("define_objective", {"id": "make_breakfast", "description": "Make a delicious breakfast"})
     assert add_obj_result[0].text == "Objective 'make_breakfast' defined."  # type: ignore
 
-    # 2. Add all tasks with prerequisites
+    # 2. Define all tasks with prerequisites
     tasks_to_add = [
         {"id": "toast_bread", "description": "Toast a slice of bread", "prerequisites": []},
         {"id": "boil_water", "description": "Boil water for tea", "prerequisites": []},
@@ -218,36 +225,29 @@ async def test_full_workflow(client: Client):
     feasibility_result = await client.call_tool("evaluate_feasibility", {"objective_id": "make_breakfast"})
     assert feasibility_result[0].text == "Objective 'make_breakfast' appears feasible."  # type: ignore
 
-    # 4. Execute tasks in a valid order
-    # First, the tasks with no prerequisites should be available
-    next_task_1 = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
-    assert next_task_1[0].text in [  # type: ignore
-        "Next task for objective 'make_breakfast': toast_bread - Toast a slice of bread",
-        "Next task for objective 'make_breakfast': boil_water - Boil water for tea"
-    ]
-    await client.call_tool("complete_task", {"task_id": "toast_bread"})
-
-    next_task_2 = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
-    assert next_task_2[0].text == "Next task for objective 'make_breakfast': boil_water - Boil water for tea"  # type: ignore
-    await client.call_tool("complete_task", {"task_id": "boil_water"})
+    # 4. Execute tasks by following the next_task prompts from complete_task
+    # The first task is retrieved separately.
+    next_task_str = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
+    assert next_task_str[0].text == "Next task for objective 'make_breakfast': toast_bread - Toast a slice of bread" # type: ignore
     
-    # Now the dependent tasks should become available
-    next_task_3 = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
-    assert next_task_3[0].text in [  # type: ignore
-        "Next task for objective 'make_breakfast': butter_toast - Butter the toast",
-        "Next task for objective 'make_breakfast': brew_tea - Brew a cup of tea"
-    ]
-    await client.call_tool("complete_task", {"task_id": "butter_toast"})
-
-    next_task_4 = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
-    assert next_task_4[0].text == "Next task for objective 'make_breakfast': brew_tea - Brew a cup of tea"  # type: ignore
-    await client.call_tool("complete_task", {"task_id": "brew_tea"})
+    # Complete tasks in sequence, verifying the next task is returned each time.
+    next_task_str = await client.call_tool("complete_task", {"task_id": "toast_bread"})
+    assert "Task 'toast_bread' marked as completed." in next_task_str[0].text  # type: ignore
+    assert "Next task for objective 'make_breakfast': boil_water - Boil water for tea" in next_task_str[0].text  # type: ignore
     
-    # Finally, the last task
-    next_task_5 = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
-    assert next_task_5[0].text == "Next task for objective 'make_breakfast': serve_breakfast - Serve the delicious breakfast"  # type: ignore
-    await client.call_tool("complete_task", {"task_id": "serve_breakfast"})
+    next_task_str = await client.call_tool("complete_task", {"task_id": "boil_water"})
+    assert "Task 'boil_water' marked as completed." in next_task_str[0].text # type: ignore
+    assert "Next task for objective 'make_breakfast': butter_toast - Butter the toast" in next_task_str[0].text  # type: ignore
 
-    # 5. Confirm completion
-    final_task = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
-    assert final_task[0].text == "Objective 'make_breakfast' is completed. All tasks are done."  # type: ignore 
+    next_task_str = await client.call_tool("complete_task", {"task_id": "butter_toast"})
+    assert "Task 'butter_toast' marked as completed." in next_task_str[0].text # type: ignore
+    assert "Next task for objective 'make_breakfast': brew_tea - Brew a cup of tea" in next_task_str[0].text  # type: ignore
+    
+    next_task_str = await client.call_tool("complete_task", {"task_id": "brew_tea"})
+    assert "Task 'brew_tea' marked as completed." in next_task_str[0].text # type: ignore
+    assert "Next task for objective 'make_breakfast': serve_breakfast - Serve the delicious breakfast" in next_task_str[0].text  # type: ignore
+
+    # 5. Complete the final task and confirm the objective is done
+    final_result = await client.call_tool("complete_task", {"task_id": "serve_breakfast"})
+    assert "Task 'serve_breakfast' marked as completed." in final_result[0].text # type: ignore
+    assert "Objective 'make_breakfast' is completed. All tasks are done." in final_result[0].text  # type: ignore 

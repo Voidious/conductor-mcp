@@ -124,12 +124,25 @@ def define_task(ctx: Context, id: str, description: str, objective_id: str, prer
 
 @mcp.tool()
 def complete_task(ctx: Context, task_id: str) -> str:
-    """Marks a task as completed."""
+    """Marks a task as completed and returns the next available task."""
     state = get_session_state(ctx)
     if task_id not in state.tasks:
         return f"Task '{task_id}' not found."
+    
     state.tasks[task_id].completed = True
-    return f"Task '{task_id}' marked as completed."
+    completion_message = f"Task '{task_id}' marked as completed"
+
+    objective_for_task = None
+    for objective in state.objectives.values():
+        if task_id in objective.tasks:
+            objective_for_task = objective
+            break
+            
+    if not objective_for_task:
+        return f"{completion_message}, but it does not belong to any objective."
+
+    next_task_message = _get_next_task_logic(ctx, objective_for_task.id)
+    return f"{completion_message}.\n{next_task_message}"
 
 @mcp.tool()
 def define_prerequisite(ctx: Context, task_id: str, prerequisite_id: str) -> str:
@@ -152,12 +165,10 @@ def define_prerequisite(ctx: Context, task_id: str, prerequisite_id: str) -> str
     task.prerequisites.append(prerequisite_id)
     return f"Added prerequisite '{prerequisite_id}' to task '{task_id}'."
 
-@mcp.tool()
-def get_next_task(ctx: Context, objective_id: str) -> str:
+def _get_next_task_logic(ctx: Context, objective_id: str) -> str:
     """
-    Finds the next available task for a given objective. Returns a message indicating
-    the objective is complete if all tasks are done, or if the objective is blocked
-    by a missing or incomplete prerequisite.
+    Contains the core logic for finding the next available task for a given objective.
+    This helper can be called from other tools without invoking the MCP tool mechanism.
     """
     state = get_session_state(ctx)
     objective = state.objectives.get(objective_id)
@@ -203,6 +214,15 @@ def get_next_task(ctx: Context, objective_id: str) -> str:
         return f"Objective '{objective_id}' is completed. All tasks are done."
     else:
         return f"Objective '{objective_id}' is blocked. No tasks are currently available."
+
+@mcp.tool()
+def get_next_task(ctx: Context, objective_id: str) -> str:
+    """
+    Finds the next available task for a given objective. Returns a message indicating
+    the objective is complete if all tasks are done, or if the objective is blocked
+    by a missing or incomplete prerequisite.
+    """
+    return _get_next_task_logic(ctx, objective_id)
 
 @mcp.tool()
 def evaluate_feasibility(ctx: Context, objective_id: str) -> str:
