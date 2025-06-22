@@ -38,7 +38,6 @@ mcp.server_state = ServerState()
 
 # --- Tools ---
 
-@mcp.tool()
 def _reset_state() -> str:
     """Resets the in-memory storage. For testing purposes only."""
     mcp.server_state.reset()

@@ -12,6 +12,8 @@ async def client():
     """
     importlib.reload(main)
     mcp_instance: ConductorMCP = main.mcp
+    # Register the reset tool dynamically for testing only.
+    mcp_instance.tool()(main._reset_state)
     async with Client(mcp_instance) as c:
         await c.call_tool("_reset_state")
         yield c
