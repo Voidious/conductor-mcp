@@ -63,30 +63,28 @@ Once the installation is complete, you can run the server and start interacting 
 2.  **Available Tools**:
     You can interact with the server using the following tools:
 
-    - `add_objective(id: str, description: str)`: Creates a new objective to track.
-    - `add_task(id: str, description: str, objective_id: str, dependencies: List[str] = [])`: Adds a new task to an existing objective. You can specify a list of task IDs that it depends on.
-    - `add_dependency(task_id: str, dependency_id: str)`: Adds a new dependency to a task that has already been created.
-    - `get_next_task(objective_id: str)`: Finds the next step for an objective. It first checks for any undefined task dependencies and, if any are found, instructs the user to define the missing task. Only when all tasks are defined does it return the next unblocked task to be executed. This approach front-loads the work of resolving unknown dependencies and ambiguity.
-    - `complete_task(task_id: str)`: Marks a specific task as completed.
-    - `evaluate_feasibility(objective_id: str)`: Checks if all dependencies for all tasks in an objective are recognized by the system.
+    - `define_objective(id: str, description: str)`: Defines a new objective to be achieved.
+    - `define_task(id: str, description: str, objective_id: str, prerequisites: List[str] = [])`: Defines a new task as a part of achieving an objective. You can specify a list of task IDs that are its prerequisites.
+    - `define_prerequisite(task_id: str, prerequisite_id: str)`: Defines a new prerequisite for an existing task.
+    - `get_next_task(objective_id: str)`: Finds the next available task for a given objective. Returns a message indicating the objective is complete if all tasks are done, or if the objective is blocked by a missing or incomplete prerequisite.
+    - `complete_task(task_id: str)`: Marks a task as completed and returns the next available task.
+    - `evaluate_feasibility(objective_id: str)`: Evaluates if an objective is feasible by checking for unknown prerequisites.
 
 ### Example Workflow
 
 Here is a simple example of how to use the tools to manage an objective:
 
-1.  **Add an objective**: `add_objective(id="learn_mcp", description="Learn the Model Context Protocol")`
-2.  **Add tasks**:
-    - `add_task(id="read_docs", description="Read the FastMCP documentation", objective_id="learn_mcp")`
-    - `add_task(id="build_server", description="Build a simple MCP server", objective_id="learn_mcp", dependencies=["read_docs"])`
-    - `add_task(id="test_server", description="Test the server with a client", objective_id="learn_mcp", dependencies=["build_server"])`
+1.  **Define an objective**: `define_objective(id="learn_mcp", description="Learn the Model Context Protocol")`
+2.  **Define tasks**:
+    - `define_task(id="read_docs", description="Read the FastMCP documentation", objective_id="learn_mcp")`
+    - `define_task(id="build_server", description="Build a simple MCP server", objective_id="learn_mcp", prerequisites=["read_docs"])`
+    - `define_task(id="test_server", description="Test the server with a client", objective_id="learn_mcp", prerequisites=["build_server"])`
 3.  **Execute the plan**:
-    - `get_next_task(objective_id="learn_mcp")` -> Returns `read_docs`.
-    - `complete_task(task_id="read_docs")`
-    - `get_next_task(objective_id="learn_mcp")` -> Returns `build_server`.
-    - `complete_task(task_id="build_server")`
-    - `get_next_task(objective_id="learn_mcp")` -> Returns `test_server`.
-    - `complete_task(task_id="test_server")`
-4.  **Confirm completion**: `get_next_task(objective_id="learn_mcp")` -> Returns a message that no tasks are available.
+    - `get_next_task(objective_id="learn_mcp")` -> Returns `"Next task for objective 'learn_mcp': read_docs - Read the FastMCP documentation"`.
+    - `complete_task(task_id="read_docs")` -> Returns `"Task 'read_docs' marked as completed.\nNext task for objective 'learn_mcp': build_server - Build a simple MCP server"`.
+    - `complete_task(task_id="build_server")` -> Returns `"Task 'build_server' marked as completed.\nNext task for objective 'learn_mcp': test_server - Test the server with a client"`.
+    - `complete_task(task_id="test_server")` -> Returns `"Task 'test_server' marked as completed.\nObjective 'learn_mcp' is completed. All tasks are done."`.
+4.  **Confirm completion**: `get_next_task(objective_id="learn_mcp")` -> Returns a message that the objective is complete.
 
 ## Running Tests
 
