@@ -13,6 +13,12 @@ The primary purpose of Conductor MCP is to provide a framework for:
 - **Intelligent Task Execution**: Determining the next available task based on completed dependencies.
 - **Feasibility Analysis**: Checking if an objective is achievable by verifying that all task dependencies are defined within the system.
 
+## Multi-Session Support
+
+This server is designed to be multi-tenant. It uses the `session_id` (or `client_id` as a fallback) provided by the client to create a unique, isolated workspace for each user session.
+
+All objectives, tasks, and their states are automatically namespaced. This means that multiple users or applications can interact with the server simultaneously without their data interfering with one another, ensuring a secure and predictable experience.
+
 ## Installation
 
 To get started with Conductor MCP, follow these installation instructions.

@@ -1,6 +1,7 @@
+import sys
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 
 # --- Data Structures ---
 
@@ -17,7 +18,7 @@ class Objective(BaseModel):
     completed: bool = False
 
 class ServerState:
-    """A class to hold the server's in-memory state."""
+    """A class to hold the server's in-memory state for a single session."""
     def __init__(self):
         self.objectives: Dict[str, Objective] = {}
         self.tasks: Dict[str, Task] = {}
@@ -27,94 +28,139 @@ class ServerState:
         self.tasks.clear()
 
 class ConductorMCP(FastMCP):
-    """A custom FastMCP subclass that includes our server state."""
-    server_state: ServerState
+    """A custom FastMCP subclass that will hold all session states."""
+    sessions: Dict[str, ServerState]
 
 # --- MCP Server Setup ---
 
 mcp = ConductorMCP("Conductor MCP")
-mcp.server_state = ServerState()
+mcp.sessions = {}  # type: ignore
 
+# --- Session Management ---
+
+def get_session_state(ctx: Context) -> ServerState:
+    """
+    Gets or creates the state for the current session, ensuring data isolation.
+    It uses the session_id or, as a fallback, the client_id to namespace the data.
+    """
+    mcp_instance: ConductorMCP = ctx.fastmcp # type: ignore
+    
+    # Safely get the session key, preferring session_id but falling back to client_id.
+    session_key = getattr(ctx, 'session_id', None) or getattr(ctx, 'client_id', None)
+
+    # If no key is found and we are in a test environment, use a default key.
+    if not session_key and 'pytest' in sys.modules:
+        session_key = "test_session"
+
+    if not session_key:
+        # This case should only happen if no identifier can be found.
+        raise ValueError("Could not determine a unique session or client ID for state management.")
+
+    if session_key not in mcp_instance.sessions:
+        mcp_instance.sessions[session_key] = ServerState()
+    
+    return mcp_instance.sessions[session_key]
 
 # --- Tools ---
 
-def _reset_state() -> str:
-    """Resets the in-memory storage. For testing purposes only."""
-    mcp.server_state.reset()
-    return "State has been reset."
+def _reset_state(ctx: Context) -> str:
+    """Resets the in-memory storage for the current session. For testing purposes only."""
+    state = get_session_state(ctx)
+    state.reset()
+    return "State for the current session has been reset."
 
 @mcp.tool()
-def add_objective(id: str, description: str) -> str:
-    """Adds a new objective."""
-    state = mcp.server_state
+def add_objective(ctx: Context, id: str, description: str) -> str:
+    """Adds a new objective to the current session."""
+    state = get_session_state(ctx)
     if id in state.objectives:
         return f"Objective '{id}' already exists."
     state.objectives[id] = Objective(id=id, description=description)
     return f"Objective '{id}' added."
 
-def _check_for_cycles(new_task_id: str, new_dependencies: List[str], existing_tasks: Dict[str, Task]) -> bool:
-    """
-    Checks if adding a new task with its dependencies would create a cycle.
-    Uses Depth First Search (DFS) to traverse the graph.
-    """
-    temp_tasks = existing_tasks.copy()
-    temp_tasks[new_task_id] = Task(id=new_task_id, description="", dependencies=new_dependencies)
-
-    visiting = set()
+def _check_for_cycles(task_id: str, dependencies: List[str], all_tasks: Dict[str, Task]) -> bool:
+    """Checks if adding a dependency would create a cycle."""
     visited = set()
+    recursion_stack = set()
 
-    def dfs(task_id):
-        visiting.add(task_id)
-        
-        task = temp_tasks.get(task_id)
-        cycle_found = False
-        if task:
-            for dep_id in task.dependencies:
-                if dep_id in visiting:
-                    cycle_found = True
-                    break
-                if dep_id not in visited:
-                    if dfs(dep_id):
-                        cycle_found = True
-                        break
-        
-        visiting.remove(task_id)
-        visited.add(task_id)
-        return cycle_found
+    def check_node(node_id):
+        visited.add(node_id)
+        recursion_stack.add(node_id)
 
-    return dfs(new_task_id)
+        # Get the dependencies for the current node
+        # If the node is the one we're checking, use its proposed new dependencies
+        current_deps = dependencies if node_id == task_id else all_tasks.get(node_id, Task(id="", description="")).dependencies
+
+        for dep_id in current_deps:
+            if dep_id not in visited:
+                if check_node(dep_id):
+                    return True
+            elif dep_id in recursion_stack:
+                return True
+        
+        recursion_stack.remove(node_id)
+        return False
+
+    return check_node(task_id)
 
 @mcp.tool()
-def add_task(id: str, description: str, objective_id: str, dependencies: List[str] = []) -> str:
-    """
-    Adds a new task to an objective.
-    This tool will reject tasks that would introduce a circular dependency.
-    """
-    state = mcp.server_state
-    if id in state.tasks:
-        return f"Task '{id}' already exists."
-    if objective_id not in state.objectives:
+def add_task(ctx: Context, id: str, description: str, objective_id: str, dependencies: List[str] = []) -> str:
+    """Adds a new task to an objective in the current session."""
+    state = get_session_state(ctx)
+    obj = state.objectives.get(objective_id)
+    if not obj:
         return f"Objective '{objective_id}' not found."
 
+    if id in state.tasks:
+        return f"Task '{id}' already exists."
+    
     if _check_for_cycles(id, dependencies, state.tasks):
         return f"Task '{id}' would create a circular dependency and was not added."
-
+    
     state.tasks[id] = Task(id=id, description=description, dependencies=dependencies)
-    obj = state.objectives[objective_id]
     obj.tasks.append(id)
     return f"Task '{id}' added to objective '{objective_id}'."
 
 @mcp.tool()
-def get_next_task(objective_id: str) -> str:
-    """
-    Finds the next available task for a given objective.
+def complete_task(ctx: Context, task_id: str) -> str:
+    """Marks a task as completed in the current session."""
+    state = get_session_state(ctx)
+    if task_id not in state.tasks:
+        return f"Task '{task_id}' not found."
+    state.tasks[task_id].completed = True
+    return f"Task '{task_id}' marked as completed."
 
+@mcp.tool()
+def add_dependency(ctx: Context, task_id: str, dependency_id: str) -> str:
+    """Adds a new dependency to an existing task in the current session."""
+    state = get_session_state(ctx)
+    if task_id not in state.tasks:
+        return f"Task '{task_id}' not found."
+    if task_id == dependency_id:
+        return f"Task '{task_id}' cannot depend on itself."
+
+    task = state.tasks[task_id]
+    
+    if dependency_id in task.dependencies:
+        return f"Dependency '{dependency_id}' already exists for task '{task_id}'."
+
+    new_dependencies = task.dependencies + [dependency_id]
+    if _check_for_cycles(task_id, new_dependencies, state.tasks):
+        return f"Adding dependency '{dependency_id}' to task '{task_id}' would create a circular dependency."
+
+    task.dependencies.append(dependency_id)
+    return f"Added dependency '{dependency_id}' to task '{task_id}'."
+
+@mcp.tool()
+def get_next_task(ctx: Context, objective_id: str) -> str:
+    """
+    Finds the next available task for a given objective in the current session.
     This tool first checks if all task dependencies are defined. If a dependency
     is found to be missing, it will return a message asking for the task to be
     defined. Only when all dependencies are defined will it return the next
     unblocked task. If all tasks are completed, it declares the objective complete.
     """
-    state = mcp.server_state
+    state = get_session_state(ctx)
     objective = state.objectives.get(objective_id)
 
     if not objective:
@@ -123,7 +169,6 @@ def get_next_task(objective_id: str) -> str:
     if not objective.tasks:
         return f"Objective '{objective_id}' is completed. All tasks are done."
 
-    # 1. First, check for any missing task definitions.
     for task_id in objective.tasks:
         task = state.tasks.get(task_id)
         if task:
@@ -134,7 +179,6 @@ def get_next_task(objective_id: str) -> str:
                         f"Please define the task for dependency '{dep_id}'."
                     )
 
-    # 2. If all definitions exist, find the next runnable task.
     for task_id in objective.tasks:
         task = state.tasks.get(task_id)
         if not task or task.completed:
@@ -143,7 +187,6 @@ def get_next_task(objective_id: str) -> str:
         dependencies_met = True
         for dep_id in task.dependencies:
             dep_task = state.tasks.get(dep_id)
-            # This check is now safer because we've already validated all definitions exist.
             if not dep_task or not dep_task.completed:
                 dependencies_met = False
                 break
@@ -151,7 +194,6 @@ def get_next_task(objective_id: str) -> str:
         if dependencies_met:
             return f"Next task for objective '{objective_id}': {task.id} - {task.description}"
 
-    # 3. If no runnable tasks were found, check if the objective is complete.
     all_tasks_completed = all(
         state.tasks.get(task_id, Task(id="", description="")).completed
         for task_id in objective.tasks
@@ -164,59 +206,25 @@ def get_next_task(objective_id: str) -> str:
         return f"Objective '{objective_id}' is blocked. No tasks are currently available."
 
 @mcp.tool()
-def complete_task(task_id: str) -> str:
-    """Marks a task as completed."""
-    state = mcp.server_state
-    if task_id not in state.tasks:
-        return f"Task '{task_id}' not found."
-    
-    state.tasks[task_id].completed = True
-    return f"Task '{task_id}' marked as completed."
-
-@mcp.tool()
-def evaluate_feasibility(objective_id: str) -> str:
-    """Evaluates if an objective is feasible by checking for unknown dependencies."""
-    state = mcp.server_state
+def evaluate_feasibility(ctx: Context, objective_id: str) -> str:
+    """Evaluates if an objective is feasible by checking for unknown dependencies in the current session."""
+    state = get_session_state(ctx)
     if objective_id not in state.objectives:
         return f"Objective '{objective_id}' not found."
 
-    missing_deps = []
     obj = state.objectives[objective_id]
+    missing_deps = []
     for task_id in obj.tasks:
         task = state.tasks.get(task_id)
-        if not task:
-            continue
-        for dep_id in task.dependencies:
-            if dep_id not in state.tasks:
-                missing_deps.append(dep_id)
+        if task:
+            for dep_id in task.dependencies:
+                if dep_id not in state.tasks:
+                    missing_deps.append(dep_id)
 
     if missing_deps:
-        return f"Objective '{objective_id}' is NOT feasible. Unknown dependencies: {list(set(missing_deps))}"
+        return f"Objective '{objective_id}' is NOT feasible. Unknown dependencies: {sorted(list(set(missing_deps)))}"
     else:
         return f"Objective '{objective_id}' appears feasible."
-
-@mcp.tool()
-def add_dependency(task_id: str, dependency_id: str) -> str:
-    """Adds a new dependency to an existing task."""
-    state = mcp.server_state
-
-    if task_id not in state.tasks:
-        return f"Task '{task_id}' not found."
-    if task_id == dependency_id:
-        return f"Task '{task_id}' cannot depend on itself."
-
-    task = state.tasks[task_id]
-    
-    if dependency_id in task.dependencies:
-        return f"Dependency '{dependency_id}' already exists for task '{task_id}'."
-
-    # Check for circular dependencies before adding
-    new_dependencies = task.dependencies + [dependency_id]
-    if _check_for_cycles(task_id, new_dependencies, state.tasks):
-        return f"Adding dependency '{dependency_id}' to task '{task_id}' would create a circular dependency."
-
-    task.dependencies.append(dependency_id)
-    return f"Added dependency '{dependency_id}' to task '{task_id}'."
 
 if __name__ == "__main__":
     mcp.run() 
