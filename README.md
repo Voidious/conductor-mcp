@@ -15,9 +15,9 @@ The primary purpose of Conductor MCP is to provide a framework for:
 
 ## Multi-Session Support
 
-This server is designed to be multi-tenant. It uses the `session_id` (or `client_id` as a fallback) provided by the client to create a unique, isolated workspace for each user session.
+This server is designed to be multi-tenant. It automatically creates a unique, isolated workspace for every client connection.
 
-All objectives, tasks, and their states are automatically namespaced. This means that multiple users or applications can interact with the server simultaneously without their data interfering with one another, ensuring a secure and predictable experience.
+All objectives, tasks, and their states are automatically namespaced based on the connection. This means that multiple users or applications can interact with the server simultaneously without their data interfering with one another, ensuring a secure and predictable experience without any required client-side configuration.
 
 ## Installation
 

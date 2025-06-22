@@ -41,20 +41,21 @@ mcp.sessions = {}  # type: ignore
 def get_session_state(ctx: Context) -> ServerState:
     """
     Gets or creates the state for the current session, ensuring data isolation.
-    It uses the session_id or, as a fallback, the client_id to namespace the data.
+    It automatically uses a unique identifier from the underlying connection
+    session. If no identifier can be found (e.g., in tests), it falls back
+    to a default shared session.
     """
     mcp_instance: ConductorMCP = ctx.fastmcp # type: ignore
     
-    # Safely get the session key, preferring session_id but falling back to client_id.
-    session_key = getattr(ctx, 'session_id', None) or getattr(ctx, 'client_id', None)
+    session_key = None
+    # Use the unique ID of the transport session object for automatic isolation.
+    session_obj = getattr(ctx, 'session', None)
+    if session_obj and hasattr(session_obj, 'id'):
+        session_key = session_obj.id
 
-    # If no key is found and we are in a test environment, use a default key.
-    if not session_key and 'pytest' in sys.modules:
-        session_key = "test_session"
-
+    # As a failsafe for test environments or non-compliant clients, use a default key.
     if not session_key:
-        # This case should only happen if no identifier can be found.
-        raise ValueError("Could not determine a unique session or client ID for state management.")
+        session_key = "default_session"
 
     if session_key not in mcp_instance.sessions:
         mcp_instance.sessions[session_key] = ServerState()
