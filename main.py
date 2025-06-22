@@ -195,5 +195,28 @@ def evaluate_feasibility(objective_id: str) -> str:
     else:
         return f"Objective '{objective_id}' appears feasible."
 
+@mcp.tool()
+def add_dependency(task_id: str, dependency_id: str) -> str:
+    """Adds a new dependency to an existing task."""
+    state = mcp.server_state
+
+    if task_id not in state.tasks:
+        return f"Task '{task_id}' not found."
+    if task_id == dependency_id:
+        return f"Task '{task_id}' cannot depend on itself."
+
+    task = state.tasks[task_id]
+    
+    if dependency_id in task.dependencies:
+        return f"Dependency '{dependency_id}' already exists for task '{task_id}'."
+
+    # Check for circular dependencies before adding
+    new_dependencies = task.dependencies + [dependency_id]
+    if _check_for_cycles(task_id, new_dependencies, state.tasks):
+        return f"Adding dependency '{dependency_id}' to task '{task_id}' would create a circular dependency."
+
+    task.dependencies.append(dependency_id)
+    return f"Added dependency '{dependency_id}' to task '{task_id}'."
+
 if __name__ == "__main__":
     mcp.run() 

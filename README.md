@@ -59,6 +59,7 @@ Once the installation is complete, you can run the server and start interacting 
 
     - `add_objective(id: str, description: str)`: Creates a new objective to track.
     - `add_task(id: str, description: str, objective_id: str, dependencies: List[str] = [])`: Adds a new task to an existing objective. You can specify a list of task IDs that it depends on.
+    - `add_dependency(task_id: str, dependency_id: str)`: Adds a new dependency to a task that has already been created.
     - `get_next_task(objective_id: str)`: Finds the next step for an objective. It first checks for any undefined task dependencies and, if any are found, instructs the user to define the missing task. Only when all tasks are defined does it return the next unblocked task to be executed. This approach front-loads the work of resolving unknown dependencies and ambiguity.
     - `complete_task(task_id: str)`: Marks a specific task as completed.
     - `evaluate_feasibility(objective_id: str)`: Checks if all dependencies for all tasks in an objective are recognized by the system.

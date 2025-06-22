@@ -162,6 +162,34 @@ async def test_evaluate_feasibility(client: Client):
     assert result_no_obj[0].text == "Objective 'nonexistent' not found."  # type: ignore
 
 @pytest.mark.asyncio
+async def test_add_dependency(client: Client):
+    """Tests the add_dependency tool."""
+    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
+    await client.call_tool("add_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
+    await client.call_tool("add_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1"})
+    await client.call_tool("add_task", {"id": "task3", "description": "Task 3", "objective_id": "obj1", "dependencies": ["task1"]})
+
+    # Test adding a valid dependency
+    result = await client.call_tool("add_dependency", {"task_id": "task2", "dependency_id": "task1"})
+    assert result[0].text == "Added dependency 'task1' to task 'task2'."  # type: ignore
+
+    # Test adding a dependency that already exists
+    result_exists = await client.call_tool("add_dependency", {"task_id": "task2", "dependency_id": "task1"})
+    assert result_exists[0].text == "Dependency 'task1' already exists for task 'task2'."  # type: ignore
+
+    # Test adding a dependency to a non-existent task
+    result_no_task = await client.call_tool("add_dependency", {"task_id": "nonexistent", "dependency_id": "task1"})
+    assert result_no_task[0].text == "Task 'nonexistent' not found."  # type: ignore
+    
+    # Test adding a dependency that creates a direct circular dependency
+    result_direct_cycle = await client.call_tool("add_dependency", {"task_id": "task1", "dependency_id": "task3"})
+    assert "would create a circular dependency" in result_direct_cycle[0].text  # type: ignore
+
+    # Test adding a self-dependency
+    result_self_cycle = await client.call_tool("add_dependency", {"task_id": "task1", "dependency_id": "task1"})
+    assert result_self_cycle[0].text == "Task 'task1' cannot depend on itself."  # type: ignore
+
+@pytest.mark.asyncio
 async def test_full_workflow(client: Client):
     """
     Tests the full workflow from objective creation to completion as an
