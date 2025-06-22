@@ -21,66 +21,66 @@ async def client():
         yield c
 
 @pytest.mark.asyncio
-async def test_add_objective(client: Client):
-    """Tests the add_objective tool for success and failure cases."""
+async def test_define_objective(client: Client):
+    """Tests the define_objective tool for success and failure cases."""
     # Test adding a new objective
-    result = await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
-    assert result[0].text == "Objective 'obj1' added."  # type: ignore
+    result = await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
+    assert result[0].text == "Objective 'obj1' defined."  # type: ignore
 
     # Test adding an objective that already exists
-    result_exists = await client.call_tool("add_objective", {"id": "obj1", "description": "Duplicate Objective"})
+    result_exists = await client.call_tool("define_objective", {"id": "obj1", "description": "Duplicate Objective"})
     assert result_exists[0].text == "Objective 'obj1' already exists."  # type: ignore
 
 @pytest.mark.asyncio
-async def test_add_task(client: Client):
-    """Tests the add_task tool for success and various failure cases."""
-    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
+async def test_define_task(client: Client):
+    """Tests the define_task tool for success and various failure cases."""
+    await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
 
     # Test adding a valid task
-    result = await client.call_tool("add_task", {"id": "task1", "description": "Test Task", "objective_id": "obj1"})
+    result = await client.call_tool("define_task", {"id": "task1", "description": "Test Task", "objective_id": "obj1"})
     assert result[0].text == "Task 'task1' added to objective 'obj1'."  # type: ignore
 
     # Test adding a task that already exists
-    result_exists = await client.call_tool("add_task", {"id": "task1", "description": "Duplicate Task", "objective_id": "obj1"})
+    result_exists = await client.call_tool("define_task", {"id": "task1", "description": "Duplicate Task", "objective_id": "obj1"})
     assert result_exists[0].text == "Task 'task1' already exists."  # type: ignore
 
     # Test adding a task to a non-existent objective
-    result_no_obj = await client.call_tool("add_task", {"id": "task2", "description": "Another Task", "objective_id": "nonexistent"})
+    result_no_obj = await client.call_tool("define_task", {"id": "task2", "description": "Another Task", "objective_id": "nonexistent"})
     assert result_no_obj[0].text == "Objective 'nonexistent' not found."  # type: ignore
 
-    # Test adding a task with a missing dependency is allowed
-    result_missing_dep = await client.call_tool("add_task", {
+    # Test adding a task with a missing prerequisite is allowed
+    result_missing_dep = await client.call_tool("define_task", {
         "id": "task3",
         "description": "Task with missing dep",
         "objective_id": "obj1",
-        "dependencies": ["missing_task"]
+        "prerequisites": ["missing_task"]
     })
     assert result_missing_dep[0].text == "Task 'task3' added to objective 'obj1'."  # type: ignore
 
-    # Test adding a task that would create a direct circular dependency (A -> A)
-    result_self_cycle = await client.call_tool("add_task", {
+    # Test adding a task that would create a direct deadlock (A -> A)
+    result_self_cycle = await client.call_tool("define_task", {
         "id": "task4",
         "description": "Self-referential task",
         "objective_id": "obj1",
-        "dependencies": ["task4"]
+        "prerequisites": ["task4"]
     })
-    assert "circular dependency" in result_self_cycle[0].text  # type: ignore
+    assert "deadlock" in result_self_cycle[0].text  # type: ignore
 
-    # Test adding a task that would create an indirect circular dependency (A -> B -> A)
-    await client.call_tool("add_task", {"id": "taskA", "description": "Task A", "objective_id": "obj1", "dependencies": ["taskB"]})
-    result_indirect_cycle = await client.call_tool("add_task", {
+    # Test adding a task that would create an indirect deadlock (A -> B -> A)
+    await client.call_tool("define_task", {"id": "taskA", "description": "Task A", "objective_id": "obj1", "prerequisites": ["taskB"]})
+    result_indirect_cycle = await client.call_tool("define_task", {
         "id": "taskB",
         "description": "Task B",
         "objective_id": "obj1",
-        "dependencies": ["taskA"]
+        "prerequisites": ["taskA"]
     })
-    assert "circular dependency" in result_indirect_cycle[0].text  # type: ignore
+    assert "deadlock" in result_indirect_cycle[0].text  # type: ignore
 
 @pytest.mark.asyncio
 async def test_complete_task(client: Client):
     """Tests the complete_task tool."""
-    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
-    await client.call_tool("add_task", {"id": "task1", "description": "Test Task", "objective_id": "obj1"})
+    await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
+    await client.call_tool("define_task", {"id": "task1", "description": "Test Task", "objective_id": "obj1"})
 
     # Test completing an existing task
     result = await client.call_tool("complete_task", {"task_id": "task1"})
@@ -93,9 +93,9 @@ async def test_complete_task(client: Client):
 @pytest.mark.asyncio
 async def test_get_next_task(client: Client):
     """Tests the get_next_task tool logic."""
-    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
-    await client.call_tool("add_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
-    await client.call_tool("add_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1", "dependencies": ["task1"]})
+    await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
+    await client.call_tool("define_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
+    await client.call_tool("define_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1", "prerequisites": ["task1"]})
 
     # The first available task should be task1
     result = await client.call_tool("get_next_task", {"objective_id": "obj1"})
@@ -114,82 +114,82 @@ async def test_get_next_task(client: Client):
 @pytest.mark.asyncio
 async def test_get_next_task_no_tasks(client: Client):
     """Tests that an objective with no tasks is considered complete."""
-    await client.call_tool("add_objective", {"id": "obj_no_tasks", "description": "Objective without tasks"})
+    await client.call_tool("define_objective", {"id": "obj_no_tasks", "description": "Objective without tasks"})
     result = await client.call_tool("get_next_task", {"objective_id": "obj_no_tasks"})
     assert result[0].text == "Objective 'obj_no_tasks' is completed. All tasks are done."  # type: ignore
 
 @pytest.mark.asyncio
 async def test_get_next_task_blocked(client: Client):
-    """Tests that get_next_task correctly identifies a missing dependency."""
-    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
-    await client.call_tool("add_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1", "dependencies": ["missing_def"]})
+    """Tests that get_next_task correctly identifies a missing prerequisite."""
+    await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
+    await client.call_tool("define_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1", "prerequisites": ["missing_def"]})
 
     # The tool should immediately report the missing definition.
     result = await client.call_tool("get_next_task", {"objective_id": "obj1"})
     expected_text = (
         "Objective 'obj1' is blocked. "
-        "Please define the task for dependency 'missing_def'."
+        "Please define the task for prerequisite 'missing_def'."
     )
     assert result[0].text == expected_text  # type: ignore
 
-    # Add another task with a different missing dependency. The tool should still report the first one it finds.
-    await client.call_tool("add_task", {"id": "task0", "description": "Task 0", "objective_id": "obj1", "dependencies": ["another_missing_def"]})
+    # Add another task with a different missing prerequisite. The tool should still report the first one it finds.
+    await client.call_tool("define_task", {"id": "task0", "description": "Task 0", "objective_id": "obj1", "prerequisites": ["another_missing_def"]})
     
-    # Re-run the check. The order of checking is not guaranteed, so we accept either missing dependency.
+    # Re-run the check. The order of checking is not guaranteed, so we accept either missing prerequisite.
     result_rerun = await client.call_tool("get_next_task", {"objective_id": "obj1"})
     possible_outcomes = [
-        "Objective 'obj1' is blocked. Please define the task for dependency 'missing_def'.",
-        "Objective 'obj1' is blocked. Please define the task for dependency 'another_missing_def'."
+        "Objective 'obj1' is blocked. Please define the task for prerequisite 'missing_def'.",
+        "Objective 'obj1' is blocked. Please define the task for prerequisite 'another_missing_def'."
     ]
     assert result_rerun[0].text in possible_outcomes # type: ignore
 
 @pytest.mark.asyncio
 async def test_evaluate_feasibility(client: Client):
     """Tests the evaluate_feasibility tool."""
-    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
-    await client.call_tool("add_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
-    await client.call_tool("add_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1", "dependencies": ["task1"]})
+    await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
+    await client.call_tool("define_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
+    await client.call_tool("define_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1", "prerequisites": ["task1"]})
 
     # Test a feasible objective
     result_feasible = await client.call_tool("evaluate_feasibility", {"objective_id": "obj1"})
     assert result_feasible[0].text == "Objective 'obj1' appears feasible."  # type: ignore
 
-    # Add a task with a dependency that doesn't exist
-    await client.call_tool("add_task", {"id": "task3", "description": "Task 3", "objective_id": "obj1", "dependencies": ["missing_task"]})
+    # Add a task with a prerequisite that doesn't exist
+    await client.call_tool("define_task", {"id": "task3", "description": "Task 3", "objective_id": "obj1", "prerequisites": ["missing_task"]})
     result_infeasible = await client.call_tool("evaluate_feasibility", {"objective_id": "obj1"})
-    assert "Objective 'obj1' is NOT feasible. Unknown dependencies: ['missing_task']" in result_infeasible[0].text  # type: ignore
+    assert "Objective 'obj1' is NOT feasible. Unknown prerequisites: ['missing_task']" in result_infeasible[0].text  # type: ignore
 
     # Test on a non-existent objective
     result_no_obj = await client.call_tool("evaluate_feasibility", {"objective_id": "nonexistent"})
     assert result_no_obj[0].text == "Objective 'nonexistent' not found."  # type: ignore
 
 @pytest.mark.asyncio
-async def test_add_dependency(client: Client):
-    """Tests the add_dependency tool."""
-    await client.call_tool("add_objective", {"id": "obj1", "description": "Test Objective"})
-    await client.call_tool("add_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
-    await client.call_tool("add_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1"})
-    await client.call_tool("add_task", {"id": "task3", "description": "Task 3", "objective_id": "obj1", "dependencies": ["task1"]})
+async def test_define_prerequisite(client: Client):
+    """Tests the define_prerequisite tool."""
+    await client.call_tool("define_objective", {"id": "obj1", "description": "Test Objective"})
+    await client.call_tool("define_task", {"id": "task1", "description": "Task 1", "objective_id": "obj1"})
+    await client.call_tool("define_task", {"id": "task2", "description": "Task 2", "objective_id": "obj1"})
+    await client.call_tool("define_task", {"id": "task3", "description": "Task 3", "objective_id": "obj1", "prerequisites": ["task1"]})
 
-    # Test adding a valid dependency
-    result = await client.call_tool("add_dependency", {"task_id": "task2", "dependency_id": "task1"})
-    assert result[0].text == "Added dependency 'task1' to task 'task2'."  # type: ignore
+    # Test adding a valid prerequisite
+    result = await client.call_tool("define_prerequisite", {"task_id": "task2", "prerequisite_id": "task1"})
+    assert result[0].text == "Added prerequisite 'task1' to task 'task2'."  # type: ignore
 
-    # Test adding a dependency that already exists
-    result_exists = await client.call_tool("add_dependency", {"task_id": "task2", "dependency_id": "task1"})
-    assert result_exists[0].text == "Dependency 'task1' already exists for task 'task2'."  # type: ignore
+    # Test adding a prerequisite that already exists
+    result_exists = await client.call_tool("define_prerequisite", {"task_id": "task2", "prerequisite_id": "task1"})
+    assert result_exists[0].text == "Prerequisite 'task1' already exists for task 'task2'."  # type: ignore
 
-    # Test adding a dependency to a non-existent task
-    result_no_task = await client.call_tool("add_dependency", {"task_id": "nonexistent", "dependency_id": "task1"})
+    # Test adding a prerequisite to a non-existent task
+    result_no_task = await client.call_tool("define_prerequisite", {"task_id": "nonexistent", "prerequisite_id": "task1"})
     assert result_no_task[0].text == "Task 'nonexistent' not found."  # type: ignore
     
-    # Test adding a dependency that creates a direct circular dependency
-    result_direct_cycle = await client.call_tool("add_dependency", {"task_id": "task1", "dependency_id": "task3"})
-    assert "would create a circular dependency" in result_direct_cycle[0].text  # type: ignore
+    # Test adding a prerequisite that creates a direct deadlock
+    result_direct_cycle = await client.call_tool("define_prerequisite", {"task_id": "task1", "prerequisite_id": "task3"})
+    assert "would create a deadlock" in result_direct_cycle[0].text  # type: ignore
 
-    # Test adding a self-dependency
-    result_self_cycle = await client.call_tool("add_dependency", {"task_id": "task1", "dependency_id": "task1"})
-    assert result_self_cycle[0].text == "Task 'task1' cannot depend on itself."  # type: ignore
+    # Test adding a self-prerequisite
+    result_self_cycle = await client.call_tool("define_prerequisite", {"task_id": "task1", "prerequisite_id": "task1"})
+    assert result_self_cycle[0].text == "Task 'task1' cannot have itself as a prerequisite."  # type: ignore
 
 @pytest.mark.asyncio
 async def test_full_workflow(client: Client):
@@ -198,28 +198,28 @@ async def test_full_workflow(client: Client):
     integration test.
     """
     # 1. Add the main objective
-    add_obj_result = await client.call_tool("add_objective", {"id": "make_breakfast", "description": "Make a delicious breakfast"})
-    assert add_obj_result[0].text == "Objective 'make_breakfast' added."  # type: ignore
+    add_obj_result = await client.call_tool("define_objective", {"id": "make_breakfast", "description": "Make a delicious breakfast"})
+    assert add_obj_result[0].text == "Objective 'make_breakfast' defined."  # type: ignore
 
-    # 2. Add all tasks with dependencies
+    # 2. Add all tasks with prerequisites
     tasks_to_add = [
-        {"id": "toast_bread", "description": "Toast a slice of bread", "dependencies": []},
-        {"id": "boil_water", "description": "Boil water for tea", "dependencies": []},
-        {"id": "butter_toast", "description": "Butter the toast", "dependencies": ["toast_bread"]},
-        {"id": "brew_tea", "description": "Brew a cup of tea", "dependencies": ["boil_water"]},
-        {"id": "serve_breakfast", "description": "Serve the delicious breakfast", "dependencies": ["butter_toast", "brew_tea"]},
+        {"id": "toast_bread", "description": "Toast a slice of bread", "prerequisites": []},
+        {"id": "boil_water", "description": "Boil water for tea", "prerequisites": []},
+        {"id": "butter_toast", "description": "Butter the toast", "prerequisites": ["toast_bread"]},
+        {"id": "brew_tea", "description": "Brew a cup of tea", "prerequisites": ["boil_water"]},
+        {"id": "serve_breakfast", "description": "Serve the delicious breakfast", "prerequisites": ["butter_toast", "brew_tea"]},
     ]
 
     for task in tasks_to_add:
         params = {"objective_id": "make_breakfast", **task}
-        await client.call_tool("add_task", params)
+        await client.call_tool("define_task", params)
 
     # 3. Check feasibility
     feasibility_result = await client.call_tool("evaluate_feasibility", {"objective_id": "make_breakfast"})
     assert feasibility_result[0].text == "Objective 'make_breakfast' appears feasible."  # type: ignore
 
     # 4. Execute tasks in a valid order
-    # First, the tasks with no dependencies should be available
+    # First, the tasks with no prerequisites should be available
     next_task_1 = await client.call_tool("get_next_task", {"objective_id": "make_breakfast"})
     assert next_task_1[0].text in [  # type: ignore
         "Next task for objective 'make_breakfast': toast_bread - Toast a slice of bread",

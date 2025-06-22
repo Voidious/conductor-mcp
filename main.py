@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Set
 class Task(BaseModel):
     id: str
     description: str
-    dependencies: List[str] = []
+    prerequisites: List[str] = []
     completed: bool = False
 
 class Objective(BaseModel):
@@ -65,22 +65,22 @@ def get_session_state(ctx: Context) -> ServerState:
 # --- Tools ---
 
 def _reset_state(ctx: Context) -> str:
-    """Resets the in-memory storage for the current session. For testing purposes only."""
+    """Resets the in-memory storage. For testing purposes only."""
     state = get_session_state(ctx)
     state.reset()
-    return "State for the current session has been reset."
+    return "State has been reset."
 
 @mcp.tool()
-def add_objective(ctx: Context, id: str, description: str) -> str:
-    """Adds a new objective to the current session."""
+def define_objective(ctx: Context, id: str, description: str) -> str:
+    """Defines a new objective to be achieved."""
     state = get_session_state(ctx)
     if id in state.objectives:
         return f"Objective '{id}' already exists."
     state.objectives[id] = Objective(id=id, description=description)
-    return f"Objective '{id}' added."
+    return f"Objective '{id}' defined."
 
-def _check_for_cycles(task_id: str, dependencies: List[str], all_tasks: Dict[str, Task]) -> bool:
-    """Checks if adding a dependency would create a cycle."""
+def _check_for_deadlocks(task_id: str, prerequisites: List[str], all_tasks: Dict[str, Task]) -> bool:
+    """Checks if adding a prerequisite would create a deadlock."""
     visited = set()
     recursion_stack = set()
 
@@ -88,15 +88,15 @@ def _check_for_cycles(task_id: str, dependencies: List[str], all_tasks: Dict[str
         visited.add(node_id)
         recursion_stack.add(node_id)
 
-        # Get the dependencies for the current node
-        # If the node is the one we're checking, use its proposed new dependencies
-        current_deps = dependencies if node_id == task_id else all_tasks.get(node_id, Task(id="", description="")).dependencies
+        # Get the prerequisites for the current node
+        # If the node is the one we're checking, use its proposed new prerequisites
+        current_prerequisites = prerequisites if node_id == task_id else all_tasks.get(node_id, Task(id="", description="")).prerequisites
 
-        for dep_id in current_deps:
-            if dep_id not in visited:
-                if check_node(dep_id):
+        for prerequisite_id in current_prerequisites:
+            if prerequisite_id not in visited:
+                if check_node(prerequisite_id):
                     return True
-            elif dep_id in recursion_stack:
+            elif prerequisite_id in recursion_stack:
                 return True
         
         recursion_stack.remove(node_id)
@@ -105,8 +105,8 @@ def _check_for_cycles(task_id: str, dependencies: List[str], all_tasks: Dict[str
     return check_node(task_id)
 
 @mcp.tool()
-def add_task(ctx: Context, id: str, description: str, objective_id: str, dependencies: List[str] = []) -> str:
-    """Adds a new task to an objective in the current session."""
+def define_task(ctx: Context, id: str, description: str, objective_id: str, prerequisites: List[str] = []) -> str:
+    """Defines a new task as a part of achieving an objective."""
     state = get_session_state(ctx)
     obj = state.objectives.get(objective_id)
     if not obj:
@@ -115,16 +115,16 @@ def add_task(ctx: Context, id: str, description: str, objective_id: str, depende
     if id in state.tasks:
         return f"Task '{id}' already exists."
     
-    if _check_for_cycles(id, dependencies, state.tasks):
-        return f"Task '{id}' would create a circular dependency and was not added."
+    if _check_for_deadlocks(id, prerequisites, state.tasks):
+        return f"Task '{id}' would create a deadlock and was not added."
     
-    state.tasks[id] = Task(id=id, description=description, dependencies=dependencies)
+    state.tasks[id] = Task(id=id, description=description, prerequisites=prerequisites)
     obj.tasks.append(id)
     return f"Task '{id}' added to objective '{objective_id}'."
 
 @mcp.tool()
 def complete_task(ctx: Context, task_id: str) -> str:
-    """Marks a task as completed in the current session."""
+    """Marks a task as completed."""
     state = get_session_state(ctx)
     if task_id not in state.tasks:
         return f"Task '{task_id}' not found."
@@ -132,34 +132,32 @@ def complete_task(ctx: Context, task_id: str) -> str:
     return f"Task '{task_id}' marked as completed."
 
 @mcp.tool()
-def add_dependency(ctx: Context, task_id: str, dependency_id: str) -> str:
-    """Adds a new dependency to an existing task in the current session."""
+def define_prerequisite(ctx: Context, task_id: str, prerequisite_id: str) -> str:
+    """Defines a new prerequisite for an existing task."""
     state = get_session_state(ctx)
     if task_id not in state.tasks:
         return f"Task '{task_id}' not found."
-    if task_id == dependency_id:
-        return f"Task '{task_id}' cannot depend on itself."
+    if task_id == prerequisite_id:
+        return f"Task '{task_id}' cannot have itself as a prerequisite."
 
     task = state.tasks[task_id]
     
-    if dependency_id in task.dependencies:
-        return f"Dependency '{dependency_id}' already exists for task '{task_id}'."
+    if prerequisite_id in task.prerequisites:
+        return f"Prerequisite '{prerequisite_id}' already exists for task '{task_id}'."
 
-    new_dependencies = task.dependencies + [dependency_id]
-    if _check_for_cycles(task_id, new_dependencies, state.tasks):
-        return f"Adding dependency '{dependency_id}' to task '{task_id}' would create a circular dependency."
+    new_prerequisites = task.prerequisites + [prerequisite_id]
+    if _check_for_deadlocks(task_id, new_prerequisites, state.tasks):
+        return f"Adding prerequisite '{prerequisite_id}' to task '{task_id}' would create a deadlock."
 
-    task.dependencies.append(dependency_id)
-    return f"Added dependency '{dependency_id}' to task '{task_id}'."
+    task.prerequisites.append(prerequisite_id)
+    return f"Added prerequisite '{prerequisite_id}' to task '{task_id}'."
 
 @mcp.tool()
 def get_next_task(ctx: Context, objective_id: str) -> str:
     """
-    Finds the next available task for a given objective in the current session.
-    This tool first checks if all task dependencies are defined. If a dependency
-    is found to be missing, it will return a message asking for the task to be
-    defined. Only when all dependencies are defined will it return the next
-    unblocked task. If all tasks are completed, it declares the objective complete.
+    Finds the next available task for a given objective. Returns a message indicating
+    the objective is complete if all tasks are done, or if the objective is blocked
+    by a missing or incomplete prerequisite.
     """
     state = get_session_state(ctx)
     objective = state.objectives.get(objective_id)
@@ -173,11 +171,11 @@ def get_next_task(ctx: Context, objective_id: str) -> str:
     for task_id in objective.tasks:
         task = state.tasks.get(task_id)
         if task:
-            for dep_id in task.dependencies:
-                if dep_id not in state.tasks:
+            for prerequisite_id in task.prerequisites:
+                if prerequisite_id not in state.tasks:
                     return (
                         f"Objective '{objective_id}' is blocked. "
-                        f"Please define the task for dependency '{dep_id}'."
+                        f"Please define the task for prerequisite '{prerequisite_id}'."
                     )
 
     for task_id in objective.tasks:
@@ -185,14 +183,14 @@ def get_next_task(ctx: Context, objective_id: str) -> str:
         if not task or task.completed:
             continue
 
-        dependencies_met = True
-        for dep_id in task.dependencies:
-            dep_task = state.tasks.get(dep_id)
+        prerequisites_met = True
+        for prerequisite_id in task.prerequisites:
+            dep_task = state.tasks.get(prerequisite_id)
             if not dep_task or not dep_task.completed:
-                dependencies_met = False
+                prerequisites_met = False
                 break
         
-        if dependencies_met:
+        if prerequisites_met:
             return f"Next task for objective '{objective_id}': {task.id} - {task.description}"
 
     all_tasks_completed = all(
@@ -208,22 +206,22 @@ def get_next_task(ctx: Context, objective_id: str) -> str:
 
 @mcp.tool()
 def evaluate_feasibility(ctx: Context, objective_id: str) -> str:
-    """Evaluates if an objective is feasible by checking for unknown dependencies in the current session."""
+    """Evaluates if an objective is feasible by checking for unknown prerequisites."""
     state = get_session_state(ctx)
     if objective_id not in state.objectives:
         return f"Objective '{objective_id}' not found."
 
     obj = state.objectives[objective_id]
-    missing_deps = []
+    missing_prerequisites = []
     for task_id in obj.tasks:
         task = state.tasks.get(task_id)
         if task:
-            for dep_id in task.dependencies:
-                if dep_id not in state.tasks:
-                    missing_deps.append(dep_id)
+            for prerequisite_id in task.prerequisites:
+                if prerequisite_id not in state.tasks:
+                    missing_prerequisites.append(prerequisite_id)
 
-    if missing_deps:
-        return f"Objective '{objective_id}' is NOT feasible. Unknown dependencies: {sorted(list(set(missing_deps)))}"
+    if missing_prerequisites:
+        return f"Objective '{objective_id}' is NOT feasible. Unknown prerequisites: {sorted(list(set(missing_prerequisites)))}"
     else:
         return f"Objective '{objective_id}' appears feasible."
 
