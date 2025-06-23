@@ -70,7 +70,7 @@ You can interact with the server using the following tools:
 
 - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
 - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
-- `plan_goal(goal_id: str, max_steps: Optional[int] = None)`: Generates an ordered execution plan to accomplish a goal. The plan lists the goal and all its prerequisites in the required order of completion.
+- `plan_goal(goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True)`: Generates an ordered execution plan and, optionally, a Mermaid diagram of the dependency graph. It returns a dictionary with two keys: `plan` (a list of steps) and `diagram` (a string with the Mermaid diagram, or an empty string if `include_diagram` is `False`).
 - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.
 - `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its prerequisites are met. It returns one of four statuses:
     1. The goal is complete.
@@ -90,14 +90,29 @@ Here is a simple example of how to use the tools to manage a plan:
     - `set_goal(id="learn_mcp", description="Learn the Model Context Protocol", prerequisites=["test_server"])`
 2.  **Check if your top-level goal is feasible**: `assess_goal(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete prerequisites, along with a completion summary.
 3.  **Execute the plan**:
-    - Begin by getting the steps for the top-level goal: `plan_goal(goal_id="learn_mcp")` -> Returns a list of steps, starting with the first goal to work on:
+    - Begin by getting the steps for the top-level goal: `plan_goal(goal_id="learn_mcp")` -> Returns a dictionary containing the plan and a Mermaid diagram:
       ```json
-      [
-        "Complete goal: 'read_docs' - Read the FastMCP documentation",
-        "Complete goal: 'build_server' - Build a simple MCP server",
-        "Complete goal: 'test_server' - Test the server with a client",
-        "Complete goal: 'learn_mcp' - Learn the Model Context Protocol"
-      ]
+      {
+        "plan": [
+          "Complete goal: 'read_docs' - Read the FastMCP documentation",
+          "Complete goal: 'build_server' - Build a simple MCP server",
+          "Complete goal: 'test_server' - Test the server with a client",
+          "Complete goal: 'learn_mcp' - Learn the Model Context Protocol"
+        ],
+        "diagram": "graph TD\n    read_docs[\"read_docs: Read the FastMCP documentation\"]\n    build_server[\"build_server: Build a simple MCP server\"]\n    read_docs --> build_server\n    test_server[\"test_server: Test the server with a client\"]\n    build_server --> test_server\n    learn_mcp[\"learn_mcp: Learn the Model Context Protocol\"]\n    test_server --> learn_mcp\n"
+      }
+      ```
+    - You can omit the diagram by calling: `plan_goal(goal_id="learn_mcp", include_diagram=False)`
+      ```json
+      {
+        "plan": [
+          "Complete goal: 'read_docs' - Read the FastMCP documentation",
+          "Complete goal: 'build_server' - Build a simple MCP server",
+          "Complete goal: 'test_server' - Test the server with a client",
+          "Complete goal: 'learn_mcp' - Learn the Model Context Protocol"
+        ],
+        "diagram": ""
+      }
       ```
     - `mark_goal_complete(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nYou may want to call plan_goal for: build_server"`.
     - `mark_goal_complete(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nYou may want to call plan_goal for: test_server"`.

@@ -4,6 +4,7 @@ import importlib
 import json
 import main
 from main import ConductorMCP
+from mcp.types import TextContent
 
 @pytest.fixture
 async def client():
@@ -88,25 +89,39 @@ async def test_plan_goal(client: Client):
 
     # The steps for goal2 should be goal1, then goal2
     result = await client.call_tool("plan_goal", {"goal_id": "goal2"})
-    steps_text = result[0].text
-    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    result_text = result[0].text # type: ignore
+    data = json.loads(result_text)
+    assert "plan" in data
+    assert "diagram" in data
+    steps = data["plan"]
+    diagram = data["diagram"]
+
     assert steps == [
         "Complete goal: 'goal1' - Goal 1",
         "Complete goal: 'goal2' - Goal 2",
     ]
 
+    assert 'graph TD' in diagram
+    assert 'goal1["goal1: Goal 1"]' in diagram
+    assert 'goal2["goal2: Goal 2"]' in diagram
+    assert 'goal1 --> goal2' in diagram
+
     # Complete goal1, so only goal2 should be left
     await client.call_tool("mark_goal_complete", {"goal_id": "goal1"})
     result_unblocked = await client.call_tool("plan_goal", {"goal_id": "goal2"})
-    steps_unblocked_text = result_unblocked[0].text
-    steps_unblocked = json.loads(steps_unblocked_text) if steps_unblocked_text.startswith('[') else [steps_unblocked_text]
+    result_unblocked_text = result_unblocked[0].text # type: ignore
+    data_unblocked = json.loads(result_unblocked_text)
+    steps_unblocked = data_unblocked["plan"]
+    diagram_unblocked = data_unblocked["diagram"]
     assert steps_unblocked == ["Complete goal: 'goal2' - Goal 2"]
+    assert 'goal1["goal1: Goal 1 <br/> (Completed)"]' in diagram_unblocked
 
     # Complete goal2, no steps should be left
     await client.call_tool("mark_goal_complete", {"goal_id": "goal2"})
     result_complete = await client.call_tool("plan_goal", {"goal_id": "goal2"})
-    steps_complete_text = result_complete[0].text
-    steps_complete = json.loads(steps_complete_text) if steps_complete_text.startswith('[') else [steps_complete_text]
+    result_complete_text = result_complete[0].text # type: ignore
+    data_complete = json.loads(result_complete_text)
+    steps_complete = data_complete["plan"]
     assert steps_complete == ["Goal 'goal2' is already completed."]
 
 @pytest.mark.asyncio
@@ -114,19 +129,24 @@ async def test_plan_goal_no_prereqs(client: Client):
     """Tests that a goal with no prerequisites is its own step."""
     await client.call_tool("set_goal", {"id": "goal_simple", "description": "Simple Goal"})
     result = await client.call_tool("plan_goal", {"goal_id": "goal_simple"})
-    steps_text = result[0].text
-    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    result_text = result[0].text # type: ignore
+    data = json.loads(result_text)
+    steps = data["plan"]
+    diagram = data["diagram"]
     assert steps == ["Complete goal: 'goal_simple' - Simple Goal"]
+    assert 'graph TD' in diagram
+    assert 'goal_simple["goal_simple: Simple Goal"]' in diagram
 
 @pytest.mark.asyncio
 async def test_plan_goal_max_steps(client: Client):
     """Tests the max_steps parameter of plan_goal."""
     await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
     await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
-    
+
     result = await client.call_tool("plan_goal", {"goal_id": "goal2", "max_steps": 1})
-    steps_text = result[0].text
-    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    result_text = result[0].text # type: ignore
+    data = json.loads(result_text)
+    steps = data["plan"]
     assert steps == ["Complete goal: 'goal1' - Goal 1"]
 
 @pytest.mark.asyncio
@@ -134,20 +154,26 @@ async def test_plan_goal_missing_definition(client: Client):
     """Tests that plan_goal correctly identifies a missing prerequisite goal definition."""
     await client.call_tool("set_goal", {"id": "top_goal", "description": "Top", "prerequisites": ["missing_goal"]})
     result = await client.call_tool("plan_goal", {"goal_id": "top_goal"})
-    steps_text = result[0].text
-    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    result_text = result[0].text # type: ignore
+    data = json.loads(result_text)
+    steps = data["plan"]
+    diagram = data["diagram"]
     assert steps == [
         "Define missing prerequisite goal: 'missing_goal'",
         "Complete prerequisites for goal: 'missing_goal'",
         "Complete goal: 'missing_goal' - Details to be determined.",
         "Complete goal: 'top_goal' - Top",
     ]
+    assert 'missing_goal["missing_goal (undefined)"]' in diagram
+    assert 'top_goal["top_goal: Top"]' in diagram
+    assert 'missing_goal --> top_goal' in diagram
 
     # Test with multiple missing prerequisites, ensuring it orders them correctly.
     await client.call_tool("set_goal", {"id": "top_goal_2", "description": "Top 2", "prerequisites": ["z_missing", "a_missing"]})
     result2 = await client.call_tool("plan_goal", {"goal_id": "top_goal_2"})
-    steps2_text = result2[0].text
-    steps2 = json.loads(steps2_text) if steps2_text.startswith('[') else [steps2_text]
+    result2_text = result2[0].text # type: ignore
+    data2 = json.loads(result2_text)
+    steps2 = data2["plan"]
     # The order of undefined goals depends on graph traversal, but they must come before goals that depend on them.
     assert "Define missing prerequisite goal: 'z_missing'" in steps2
     assert "Define missing prerequisite goal: 'a_missing'" in steps2
@@ -223,7 +249,7 @@ async def test_add_prerequisite_to_goal(client: Client):
     # Test adding a prerequisite to a non-existent goal
     result_no_goal = await client.call_tool("add_prerequisite_to_goal", {"goal_id": "nonexistent", "prerequisite_id": "goal1"})
     assert result_no_goal[0].text == "Goal 'nonexistent' not found."  # type: ignore
-    
+
     # Test adding a prerequisite that creates a deadlock
     result_direct_cycle = await client.call_tool("add_prerequisite_to_goal", {"goal_id": "goal1", "prerequisite_id": "goal3"})
     assert "would create a deadlock" in result_direct_cycle[0].text  # type: ignore
@@ -245,7 +271,7 @@ async def test_full_workflow_with_goals(client: Client):
         {"id": "brew_tea", "description": "Brew a cup of tea", "prerequisites": ["boil_water"]},
         {"id": "serve_breakfast", "description": "Serve the delicious breakfast", "prerequisites": ["butter_toast", "brew_tea"]},
     ]
-    
+
     for goal in goals_to_add:
         await client.call_tool("set_goal", goal)
 
@@ -256,9 +282,10 @@ async def test_full_workflow_with_goals(client: Client):
     # 3. Execute goals by following the plan_goal and mark_goal_complete prompts
     # Start with the top-level goal to find the first action
     steps_result = await client.call_tool("plan_goal", {"goal_id": "serve_breakfast"})
-    steps_text = steps_result[0].text
-    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
-    
+    steps_text = steps_result[0].text # type: ignore
+    data = json.loads(steps_text)
+    steps = data["plan"]
+
     # The first steps should be to complete the base goals. Order is not guaranteed.
     assert "Complete goal: 'toast_bread' - Toast a slice of bread" in steps
     assert "Complete goal: 'boil_water' - Boil water for tea" in steps
@@ -282,9 +309,25 @@ async def test_completion_with_multiple_dependents(client: Client):
     await client.call_tool("set_goal", {"id": "base", "description": "Base Goal"})
     await client.call_tool("set_goal", {"id": "dep1", "description": "Dependent 1", "prerequisites": ["base"]})
     await client.call_tool("set_goal", {"id": "dep2", "description": "Dependent 2", "prerequisites": ["base"]})
-    
+
     result = await client.call_tool("mark_goal_complete", {"goal_id": "base"})
     # The order of dependents is not guaranteed, so check for both.
     assert "You may want to call plan_goal for" in result[0].text  # type: ignore
     assert "dep1" in result[0].text  # type: ignore
     assert "dep2" in result[0].text  # type: ignore
+
+@pytest.mark.asyncio
+async def test_plan_goal_no_diagram(client: Client):
+    """Tests that plan_goal omits the diagram when include_diagram is False."""
+    await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
+    await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
+    result = await client.call_tool("plan_goal", {"goal_id": "goal2", "include_diagram": False})
+    result_text = result[0].text # type: ignore
+    data = json.loads(result_text)
+    steps = data["plan"]
+    diagram = data["diagram"]
+    assert steps == [
+        "Complete goal: 'goal1' - Goal 1",
+        "Complete goal: 'goal2' - Goal 2",
+    ]
+    assert diagram == ""

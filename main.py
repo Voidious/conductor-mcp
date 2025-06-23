@@ -16,7 +16,7 @@ class ServerState:
     """A class to hold the server's in-memory state."""
     def __init__(self):
         self.goals: Dict[str, Goal] = {}
-    
+
     def reset(self):
         self.goals.clear()
 
@@ -39,7 +39,7 @@ def get_session_state(ctx: Context) -> ServerState:
     to a default shared session.
     """
     mcp_instance: ConductorMCP = ctx.fastmcp # type: ignore
-    
+
     session_key = None
     # Use the unique ID of the transport session object for automatic isolation.
     session_obj = getattr(ctx, 'session', None)
@@ -52,7 +52,7 @@ def get_session_state(ctx: Context) -> ServerState:
 
     if session_key not in mcp_instance.sessions:
         mcp_instance.sessions[session_key] = ServerState()
-    
+
     return mcp_instance.sessions[session_key]
 
 # --- Tools ---
@@ -82,21 +82,21 @@ def set_goal(ctx: Context, id: str, description: str, prerequisites: List[str] =
         id: A unique string identifier for the goal (e.g., 'deploy_staging').
         description: A human-readable summary of what the goal entails.
         prerequisites: (Optional) A list of goal IDs that must be completed before this goal can be started.
-    
+
     Returns:
         A confirmation message indicating that the goal has been defined.
     """
     state = get_session_state(ctx)
-    
+
     if _check_for_deadlocks(id, prerequisites, state.goals):
         return f"Goal '{id}' would create a deadlock and was not added."
-    
+
     state.goals[id] = Goal(id=id, description=description, prerequisites=prerequisites)
-    
+
     undefined_prerequisites = [p for p in prerequisites if p not in state.goals]
     if undefined_prerequisites:
         return f"Goal '{id}' defined with the following undefined prerequisite goals: {', '.join(undefined_prerequisites)}."
-    
+
     return f"Goal '{id}' defined."
 
 def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict[str, Goal]) -> bool:
@@ -116,7 +116,7 @@ def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict
                     return True
             elif prerequisite_id in recursion_stack:
                 return True
-        
+
         recursion_stack.remove(node_id)
         return False
 
@@ -180,7 +180,7 @@ def add_prerequisite_to_goal(ctx: Context, goal_id: str, prerequisite_id: str) -
     Args:
         goal_id: The ID of the goal to which the prerequisite will be added.
         prerequisite_id: The ID of the prerequisite goal to add.
-    
+
     Returns:
         A confirmation message, indicating if any dependent goals were marked as incomplete.
     """
@@ -225,7 +225,7 @@ def reopen_goal(ctx: Context, goal_id: str) -> str:
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
-    
+
     goal = state.goals[goal_id]
     if not goal.completed:
         return f"Goal '{goal_id}' is already open."
@@ -234,13 +234,13 @@ def reopen_goal(ctx: Context, goal_id: str) -> str:
     if state.goals[goal_id].completed:
         state.goals[goal_id].completed = False
         affected.add(goal_id)
-    
+
     dependents = _find_all_dependents(goal_id, state.goals)
     for dep_id in dependents:
         if state.goals[dep_id].completed:
             state.goals[dep_id].completed = False
             affected.add(dep_id)
-    
+
     msg = f"Goal '{goal_id}' has been reopened."
     if affected:
         msg += f" The following dependent goals were also reopened: {', '.join(sorted(affected))}."
@@ -256,23 +256,33 @@ def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]
     return prereqs
 
 @mcp.tool()
-def plan_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None) -> List[str]:
+def plan_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True) -> Dict[str, Union[List[str], str]]:
     """
     Generates an ordered execution plan to accomplish a goal. The plan lists the goal and all its prerequisites in the required order of completion.
 
     Args:
         goal_id: The ID of the final goal you want to achieve.
         max_steps: (Optional) The maximum number of steps (goals) to include in the returned plan.
-    
+        include_diagram: (Optional) If False, the Mermaid diagram is omitted from the response. Defaults to True.
+
     Returns:
-        An ordered list of goal descriptions that must be completed.
+        A dictionary containing:
+        - 'plan': An ordered list of goal descriptions that must be completed.
+        - 'diagram': A Mermaid diagram of the goal dependencies, or an empty string if include_diagram is False.
     """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
-        return [f"Goal '{goal_id}' not found."]
+        return {
+            "plan": [f"Goal '{goal_id}' not found."],
+            "diagram": ""
+        }
     goal = state.goals[goal_id]
     if goal.completed:
-        return [f"Goal '{goal_id}' is already completed."]
+        return {
+            "plan": [f"Goal '{goal_id}' is already completed."],
+            "diagram": ""
+        }
+
     nodes = set()
     queue = [goal_id]
     visited = set()
@@ -285,17 +295,23 @@ def plan_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None) -> Li
         if current_id in state.goals:
             for prereq in state.goals[current_id].prerequisites:
                 queue.append(prereq)
+
     graph = {}
     for node_id in nodes:
         if node_id in state.goals:
             graph[node_id] = state.goals[node_id].prerequisites
         else:
             graph[node_id] = []
+
     try:
         ts = graphlib.TopologicalSorter(graph)
         sorted_goals = list(ts.static_order())
     except graphlib.CycleError:
-        return ["Error: A deadlock was detected in the goal dependencies. Please review your goals and prerequisites."]
+        return {
+            "plan": ["Error: A deadlock was detected in the goal dependencies. Please review your goals and prerequisites."],
+            "diagram": ""
+        }
+
     steps = []
     for g_id in sorted_goals:
         g = state.goals.get(g_id)
@@ -305,9 +321,31 @@ def plan_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None) -> Li
             steps.append(f"Complete goal: '{g_id}' - Details to be determined.")
         elif not g.completed:
             steps.append(f"Complete goal: '{g_id}' - {g.description}")
+
+    diagram = ""
+    if include_diagram:
+        diagram = "graph TD\n"
+        for node_id in nodes:
+            g = state.goals.get(node_id)
+            if g:
+                if g.completed:
+                    diagram += f'    {node_id}["{node_id}: {g.description} <br/> (Completed)"]\n'
+                else:
+                    diagram += f'    {node_id}["{node_id}: {g.description}"]\n'
+            else:
+                diagram += f'    {node_id}["{node_id} (undefined)"]\n'
+
+            if node_id in state.goals:
+                for prereq in state.goals[node_id].prerequisites:
+                    diagram += f"    {prereq} --> {node_id}\n"
+
     if max_steps is not None:
-        return steps[:max_steps]
-    return steps
+        steps = steps[:max_steps]
+
+    return {
+        "plan": steps,
+        "diagram": diagram
+    }
 
 @mcp.tool()
 def assess_goal(ctx: Context, goal_id: str) -> str:
