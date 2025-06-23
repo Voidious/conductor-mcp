@@ -5,27 +5,19 @@ from typing import List, Dict, Optional, Set
 
 # --- Data Structures ---
 
-class Task(BaseModel):
+class Goal(BaseModel):
     id: str
     description: str
     prerequisites: List[str] = []
     completed: bool = False
 
-class Objective(BaseModel):
-    id: str
-    description: str
-    tasks: List[str] = []
-    completed: bool = False
-
 class ServerState:
-    """A class to hold the server's in-memory state for a single session."""
+    """A class to hold the server's in-memory state."""
     def __init__(self):
-        self.objectives: Dict[str, Objective] = {}
-        self.tasks: Dict[str, Task] = {}
+        self.goals: Dict[str, Goal] = {}
     
     def reset(self):
-        self.objectives.clear()
-        self.tasks.clear()
+        self.goals.clear()
 
 class ConductorMCP(FastMCP):
     """A custom FastMCP subclass that will hold all session states."""
@@ -71,15 +63,19 @@ def _reset_state(ctx: Context) -> str:
     return "State has been reset."
 
 @mcp.tool()
-def define_objective(ctx: Context, id: str, description: str) -> str:
-    """Defines a new objective to be achieved."""
+def define_goal(ctx: Context, id: str, description: str, prerequisites: List[str] = []) -> str:
+    """Defines a new goal, optionally with a list of prerequisite goals."""
     state = get_session_state(ctx)
-    if id in state.objectives:
-        return f"Objective '{id}' already exists."
-    state.objectives[id] = Objective(id=id, description=description)
-    return f"Objective '{id}' defined."
+    if id in state.goals:
+        return f"Goal '{id}' already exists."
+    
+    if _check_for_deadlocks(id, prerequisites, state.goals):
+        return f"Goal '{id}' would create a deadlock and was not added."
+    
+    state.goals[id] = Goal(id=id, description=description, prerequisites=prerequisites)
+    return f"Goal '{id}' defined."
 
-def _check_for_deadlocks(task_id: str, prerequisites: List[str], all_tasks: Dict[str, Task]) -> bool:
+def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict[str, Goal]) -> bool:
     """Checks if adding a prerequisite would create a deadlock."""
     visited = set()
     recursion_stack = set()
@@ -88,9 +84,7 @@ def _check_for_deadlocks(task_id: str, prerequisites: List[str], all_tasks: Dict
         visited.add(node_id)
         recursion_stack.add(node_id)
 
-        # Get the prerequisites for the current node
-        # If the node is the one we're checking, use its proposed new prerequisites
-        current_prerequisites = prerequisites if node_id == task_id else all_tasks.get(node_id, Task(id="", description="")).prerequisites
+        current_prerequisites = prerequisites if node_id == goal_id else all_goals.get(node_id, Goal(id="", description="")).prerequisites
 
         for prerequisite_id in current_prerequisites:
             if prerequisite_id not in visited:
@@ -102,148 +96,118 @@ def _check_for_deadlocks(task_id: str, prerequisites: List[str], all_tasks: Dict
         recursion_stack.remove(node_id)
         return False
 
-    return check_node(task_id)
+    return check_node(goal_id)
 
 @mcp.tool()
-def define_task(ctx: Context, id: str, description: str, objective_id: str, prerequisites: List[str] = []) -> str:
-    """Defines a new task as a part of achieving an objective."""
+def complete_goal(ctx: Context, goal_id: str) -> str:
+    """
+    Marks a goal as completed and returns the next available goal in the
+    workflow, if there is one.
+    """
     state = get_session_state(ctx)
-    obj = state.objectives.get(objective_id)
-    if not obj:
-        return f"Objective '{objective_id}' not found."
-
-    if id in state.tasks:
-        return f"Task '{id}' already exists."
+    if goal_id not in state.goals:
+        return f"Goal '{goal_id}' not found."
     
-    if _check_for_deadlocks(id, prerequisites, state.tasks):
-        return f"Task '{id}' would create a deadlock and was not added."
-    
-    state.tasks[id] = Task(id=id, description=description, prerequisites=prerequisites)
-    obj.tasks.append(id)
-    return f"Task '{id}' added to objective '{objective_id}'."
+    goal = state.goals.get(goal_id)
+    if goal and goal.completed:
+         return f"Goal '{goal_id}' was already completed."
 
-@mcp.tool()
-def complete_task(ctx: Context, task_id: str) -> str:
-    """Marks a task as completed and returns the next available task."""
-    state = get_session_state(ctx)
-    if task_id not in state.tasks:
-        return f"Task '{task_id}' not found."
-    
-    state.tasks[task_id].completed = True
-    completion_message = f"Task '{task_id}' marked as completed"
+    state.goals[goal_id].completed = True
+    completion_message = f"Goal '{goal_id}' marked as completed"
 
-    objective_for_task = None
-    for objective in state.objectives.values():
-        if task_id in objective.tasks:
-            objective_for_task = objective
+    # Find a dependent goal to determine the next step in the workflow.
+    dependent_goal_id = None
+    for g_id in state.goals:
+        g = state.goals[g_id]
+        if goal_id in g.prerequisites:
+            dependent_goal_id = g_id
             break
-            
-    if not objective_for_task:
-        return f"{completion_message}, but it does not belong to any objective."
-
-    next_task_message = _get_next_task_logic(ctx, objective_for_task.id)
-    return f"{completion_message}.\n{next_task_message}"
+    
+    if dependent_goal_id:
+        next_goal_message = _get_next_goal_logic(ctx, dependent_goal_id)
+        return f"{completion_message}.\n{next_goal_message}"
+    
+    return f"{completion_message}."
 
 @mcp.tool()
-def define_prerequisite(ctx: Context, task_id: str, prerequisite_id: str) -> str:
-    """Defines a new prerequisite for an existing task."""
+def define_prerequisite(ctx: Context, goal_id: str, prerequisite_id: str) -> str:
+    """Defines a new prerequisite for an existing goal."""
     state = get_session_state(ctx)
-    if task_id not in state.tasks:
-        return f"Task '{task_id}' not found."
-    if task_id == prerequisite_id:
-        return f"Task '{task_id}' cannot have itself as a prerequisite."
+    if goal_id not in state.goals:
+        return f"Goal '{goal_id}' not found."
+    if prerequisite_id not in state.goals:
+        return f"Prerequisite goal '{prerequisite_id}' not found."
+    if goal_id == prerequisite_id:
+        return f"Goal '{goal_id}' cannot have itself as a prerequisite."
 
-    task = state.tasks[task_id]
+    goal = state.goals[goal_id]
     
-    if prerequisite_id in task.prerequisites:
-        return f"Prerequisite '{prerequisite_id}' already exists for task '{task_id}'."
+    if prerequisite_id in goal.prerequisites:
+        return f"Prerequisite '{prerequisite_id}' already exists for goal '{goal_id}'."
 
-    new_prerequisites = task.prerequisites + [prerequisite_id]
-    if _check_for_deadlocks(task_id, new_prerequisites, state.tasks):
-        return f"Adding prerequisite '{prerequisite_id}' to task '{task_id}' would create a deadlock."
+    new_prerequisites = goal.prerequisites + [prerequisite_id]
+    if _check_for_deadlocks(goal_id, new_prerequisites, state.goals):
+        return f"Adding prerequisite '{prerequisite_id}' to goal '{goal_id}' would create a deadlock."
 
-    task.prerequisites.append(prerequisite_id)
-    return f"Added prerequisite '{prerequisite_id}' to task '{task_id}'."
+    goal.prerequisites.append(prerequisite_id)
+    return f"Added prerequisite '{prerequisite_id}' to goal '{goal_id}'."
 
-def _get_next_task_logic(ctx: Context, objective_id: str) -> str:
-    """
-    Contains the core logic for finding the next available task for a given objective.
-    This helper can be called from other tools without invoking the MCP tool mechanism.
-    """
+def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]:
+    """Recursively fetches all prerequisites for a given goal."""
+    prereqs = set()
+    for prereq_id in all_goals.get(goal_id, Goal(id="", description="")).prerequisites:
+        if prereq_id not in prereqs:
+            prereqs.add(prereq_id)
+            prereqs.update(_get_all_prerequisites(prereq_id, all_goals))
+    return prereqs
+
+def _get_next_goal_logic(ctx: Context, goal_id: str) -> str:
+    """Contains the core logic for finding the next available goal."""
     state = get_session_state(ctx)
-    objective = state.objectives.get(objective_id)
+    if goal_id not in state.goals:
+        return f"Goal '{goal_id}' not found."
 
-    if not objective:
-        return f"Objective '{objective_id}' not found."
+    top_level_goal = state.goals[goal_id]
+    if top_level_goal.completed:
+        return f"Goal '{goal_id}' is already completed."
 
-    if not objective.tasks:
-        return f"Objective '{objective_id}' is completed. All tasks are done."
+    all_prereqs = _get_all_prerequisites(goal_id, state.goals)
+    all_prereqs.add(goal_id)
 
-    for task_id in objective.tasks:
-        task = state.tasks.get(task_id)
-        if task:
-            for prerequisite_id in task.prerequisites:
-                if prerequisite_id not in state.tasks:
-                    return (
-                        f"Objective '{objective_id}' is blocked. "
-                        f"Please define the task for prerequisite '{prerequisite_id}'."
-                    )
-
-    for task_id in objective.tasks:
-        task = state.tasks.get(task_id)
-        if not task or task.completed:
+    for current_goal_id in sorted(list(all_prereqs)):
+        current_goal = state.goals.get(current_goal_id)
+        if not current_goal or current_goal.completed:
             continue
 
-        prerequisites_met = True
-        for prerequisite_id in task.prerequisites:
-            dep_task = state.tasks.get(prerequisite_id)
-            if not dep_task or not dep_task.completed:
-                prerequisites_met = False
-                break
+        prerequisites_met = all(
+            state.goals.get(prereq_id, Goal(id="", description="")).completed
+            for prereq_id in current_goal.prerequisites
+        )
         
         if prerequisites_met:
-            return f"Next task for objective '{objective_id}': {task.id} - {task.description}"
+            return f"Next goal for '{goal_id}': {current_goal.id} - {current_goal.description}"
 
-    all_tasks_completed = all(
-        state.tasks.get(task_id, Task(id="", description="")).completed
-        for task_id in objective.tasks
-    )
-
-    if all_tasks_completed:
-        objective.completed = True
-        return f"Objective '{objective_id}' is completed. All tasks are done."
-    else:
-        return f"Objective '{objective_id}' is blocked. No tasks are currently available."
+    return f"Goal '{goal_id}' is blocked because no actionable task could be found in its dependency tree."
 
 @mcp.tool()
-def get_next_task(ctx: Context, objective_id: str) -> str:
-    """
-    Finds the next available task for a given objective. Returns a message indicating
-    the objective is complete if all tasks are done, or if the objective is blocked
-    by a missing or incomplete prerequisite.
-    """
-    return _get_next_task_logic(ctx, objective_id)
+def get_next_goal(ctx: Context, goal_id: str) -> str:
+    """Finds the next available goal to work on in order to complete the given goal."""
+    return _get_next_goal_logic(ctx, goal_id)
 
 @mcp.tool()
-def evaluate_feasibility(ctx: Context, objective_id: str) -> str:
-    """Evaluates if an objective is feasible by checking for unknown prerequisites."""
+def evaluate_feasibility(ctx: Context, goal_id: str) -> str:
+    """Evaluates if a goal is feasible by checking for unknown prerequisites."""
     state = get_session_state(ctx)
-    if objective_id not in state.objectives:
-        return f"Objective '{objective_id}' not found."
+    if goal_id not in state.goals:
+        return f"Goal '{goal_id}' not found."
 
-    obj = state.objectives[objective_id]
-    missing_prerequisites = []
-    for task_id in obj.tasks:
-        task = state.tasks.get(task_id)
-        if task:
-            for prerequisite_id in task.prerequisites:
-                if prerequisite_id not in state.tasks:
-                    missing_prerequisites.append(prerequisite_id)
+    all_prereqs = _get_all_prerequisites(goal_id, state.goals)
+    unknown_prereqs = [prereq for prereq in all_prereqs if prereq not in state.goals]
 
-    if missing_prerequisites:
-        return f"Objective '{objective_id}' is NOT feasible. Unknown prerequisites: {sorted(list(set(missing_prerequisites)))}"
+    if unknown_prereqs:
+        return f"Goal '{goal_id}' is NOT feasible. Unknown prerequisites: {sorted(list(set(unknown_prereqs)))}"
     else:
-        return f"Objective '{objective_id}' appears feasible."
+        return f"Goal '{goal_id}' appears feasible."
 
 if __name__ == "__main__":
     mcp.run() 

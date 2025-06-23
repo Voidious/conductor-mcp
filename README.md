@@ -1,6 +1,6 @@
 # Conductor MCP
 
-Conductor MCP is a Python-based server that uses the Model Context Protocol (MCP) to help you define, track, and execute complex objectives. It allows you to break down a large goal into smaller, manageable tasks with specified dependencies, ensuring that they are executed in the correct order.
+Conductor MCP is a Python-based server that uses the Model Context Protocol (MCP) to help you define, track, and execute complex plans. It allows you to break down a large goal into a dependency graph of smaller, more manageable sub-goals, ensuring that they are executed in the correct order.
 
 This tool is designed to be used with an MCP-compatible client or an LLM that can interact with MCP tools. It provides a simple yet powerful way to manage workflows and evaluate the feasibility of your plans.
 
@@ -8,16 +8,15 @@ This tool is designed to be used with an MCP-compatible client or an LLM that ca
 
 The primary purpose of Conductor MCP is to provide a framework for:
 
-- **Objective Tracking**: Defining high-level objectives.
-- **Dependency Management**: Creating a graph of tasks that depend on one another.
-- **Intelligent Task Execution**: Determining the next available task based on completed dependencies.
-- **Feasibility Analysis**: Checking if an objective is achievable by verifying that all task dependencies are defined within the system.
+- **Goal Management**: Defining a graph of goals, where each goal can have prerequisites (other goals that must be completed first).
+- **Intelligent Execution**: Determining the next available goal based on the dependency graph and completed goals.
+- **Feasibility Analysis**: Checking if a goal is achievable by verifying that all its prerequisites (and their prerequisites, recursively) are defined within the system.
 
 ## Multi-Session Support
 
 This server is designed to be multi-tenant. It automatically creates a unique, isolated workspace for every client connection.
 
-All objectives, tasks, and their states are automatically namespaced based on the connection. This means that multiple users or applications can interact with the server simultaneously without their data interfering with one another, ensuring a secure and predictable experience without any required client-side configuration.
+All goals and their states are automatically namespaced based on the connection. This means that multiple users or applications can interact with the server simultaneously without their data interfering with one another, ensuring a secure and predictable experience without any required client-side configuration.
 
 ## Installation
 
@@ -63,28 +62,29 @@ Once the installation is complete, you can run the server and start interacting 
 2.  **Available Tools**:
     You can interact with the server using the following tools:
 
-    - `define_objective(id: str, description: str)`: Defines a new objective to be achieved.
-    - `define_task(id: str, description: str, objective_id: str, prerequisites: List[str] = [])`: Defines a new task as a part of achieving an objective. You can specify a list of task IDs that are its prerequisites.
-    - `define_prerequisite(task_id: str, prerequisite_id: str)`: Defines a new prerequisite for an existing task.
-    - `get_next_task(objective_id: str)`: Finds the next available task for a given objective. Returns a message indicating the objective is complete if all tasks are done, or if the objective is blocked by a missing or incomplete prerequisite.
-    - `complete_task(task_id: str)`: Marks a task as completed and returns the next available task.
-    - `evaluate_feasibility(objective_id: str)`: Evaluates if an objective is feasible by checking for unknown prerequisites.
+    - `define_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal, optionally with a list of prerequisite goals.
+    - `define_prerequisite(goal_id: str, prerequisite_id: str)`: Defines a new prerequisite for an existing goal.
+    - `get_next_goal(goal_id: str)`: Finds the next available goal to work on in order to complete the given goal.
+    - `complete_goal(goal_id: str)`: Marks a goal as completed and returns the next available goal in the workflow, if there is one.
+    - `evaluate_feasibility(goal_id: str)`: Evaluates if a goal is feasible by checking for unknown prerequisites.
 
 ### Example Workflow
 
-Here is a simple example of how to use the tools to manage an objective:
+Here is a simple example of how to use the tools to manage a plan:
 
-1.  **Define an objective**: `define_objective(id="learn_mcp", description="Learn the Model Context Protocol")`
-2.  **Define tasks**:
-    - `define_task(id="read_docs", description="Read the FastMCP documentation", objective_id="learn_mcp")`
-    - `define_task(id="build_server", description="Build a simple MCP server", objective_id="learn_mcp", prerequisites=["read_docs"])`
-    - `define_task(id="test_server", description="Test the server with a client", objective_id="learn_mcp", prerequisites=["build_server"])`
+1.  **Define all your goals**:
+    - `define_goal(id="read_docs", description="Read the FastMCP documentation")`
+    - `define_goal(id="build_server", description="Build a simple MCP server", prerequisites=["read_docs"])`
+    - `define_goal(id="test_server", description="Test the server with a client", prerequisites=["build_server"])`
+    - `define_goal(id="learn_mcp", description="Learn the Model Context Protocol", prerequisites=["test_server"])`
+2.  **Check if your top-level goal is feasible**: `evaluate_feasibility(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' appears feasible."`.
 3.  **Execute the plan**:
-    - `get_next_task(objective_id="learn_mcp")` -> Returns `"Next task for objective 'learn_mcp': read_docs - Read the FastMCP documentation"`.
-    - `complete_task(task_id="read_docs")` -> Returns `"Task 'read_docs' marked as completed.\nNext task for objective 'learn_mcp': build_server - Build a simple MCP server"`.
-    - `complete_task(task_id="build_server")` -> Returns `"Task 'build_server' marked as completed.\nNext task for objective 'learn_mcp': test_server - Test the server with a client"`.
-    - `complete_task(task_id="test_server")` -> Returns `"Task 'test_server' marked as completed.\nObjective 'learn_mcp' is completed. All tasks are done."`.
-4.  **Confirm completion**: `get_next_task(objective_id="learn_mcp")` -> Returns a message that the objective is complete.
+    - Begin by finding the first goal to work on: `get_next_goal(goal_id="learn_mcp")` -> Returns `"Next goal for 'learn_mcp': read_docs - Read the FastMCP documentation"`.
+    - `complete_goal(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nNext goal for 'build_server': build_server - Build a simple MCP server"`.
+    - `complete_goal(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nNext goal for 'test_server': test_server - Test the server with a client"`.
+    - `complete_goal(goal_id="test_server")` -> Returns `"Goal 'test_server' marked as completed.\nNext goal for 'learn_mcp': learn_mcp - Learn the Model Context Protocol"`.
+    - `complete_goal(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' marked as completed."`.
+4.  **Confirm completion**: `get_next_goal(goal_id="learn_mcp")` -> Returns a message that the goal is already complete.
 
 ## Running Tests
 
