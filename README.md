@@ -50,28 +50,34 @@ To get started with Conductor MCP, follow these installation instructions.
 
 ## Usage
 
-Once the installation is complete, you can run the server and start interacting with its tools.
+Conductor MCP is designed to be used as a server with an MCP-compatible client, such as an AI coding assistant in an editor like Cursor or VS Code.
 
-1.  **Run the Server**:
-    From the root directory of the project, run the following command:
-    ```bash
-    python main.py
-    ```
-    The server will start and be ready to accept requests from an MCP client.
+To configure the server, find the "MCP Tools" or "MCP Servers" settings in your editor's configuration. Then, add a new server configuration block like this:
 
-2.  **Available Tools**:
-    You can interact with the server using the following tools:
+```json
+"conductor": {
+  "command": "python",
+  "args": ["/path/to/your/clone/of/conductor-mcp/main.py"]
+}
+```
 
-    - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
-    - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
-    - `plan_goal(goal_id: str, max_steps: Optional[int] = None)`: Generates an ordered execution plan to accomplish a goal. The plan lists the goal and all its prerequisites in the required order of completion.
-    - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.
-    - `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its prerequisites are met. It returns one of four statuses:
-        1. The goal is complete.
-        2. The goal is ready because all prerequisite goals have been met.
-        3. The goal is well-defined, but some prerequisites are not yet complete.
-        4. The goal has undefined prerequisites and requires more definition.
-    - `reopen_goal(goal_id: str)`: Reopens a goal, marking it and any goals that depend on it as incomplete.
+Make sure to replace `/path/to/your/clone/of/conductor-mcp/main.py` with the actual path to the `main.py` file in your cloned repository.
+
+Once configured, your AI coding assistant will be able to use the Conductor MCP tools.
+
+### Available Tools
+You can interact with the server using the following tools:
+
+- `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
+- `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
+- `plan_goal(goal_id: str, max_steps: Optional[int] = None)`: Generates an ordered execution plan to accomplish a goal. The plan lists the goal and all its prerequisites in the required order of completion.
+- `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.
+- `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its prerequisites are met. It returns one of four statuses:
+    1. The goal is complete.
+    2. The goal is ready because all prerequisite goals have been met.
+    3. The goal is well-defined, but some prerequisites are not yet complete.
+    4. The goal has undefined prerequisites and requires more definition.
+- `reopen_goal(goal_id: str)`: Reopens a goal, marking it and any goals that depend on it as incomplete.
 
 ### Example Workflow
 
