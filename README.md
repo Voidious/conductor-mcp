@@ -64,13 +64,14 @@ Once the installation is complete, you can run the server and start interacting 
 
     - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
     - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
-    - `get_steps_for_goal(goal_id: str, max_steps: Optional[int] = None)`: Returns an ordered list of all steps needed to accomplish the goal by running a topological sort on the graph of goals. Each step in the returned list is either to define a missing prerequisite goal or to complete a defined goal.
+    - `plan_goal(goal_id: str, max_steps: Optional[int] = None)`: Returns an ordered list of all steps needed to accomplish the goal by running a topological sort on the graph of goals. Each step in the returned list is either to define a missing prerequisite goal or to complete a defined goal.
     - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.
-    - `check_goal_feasibility(goal_id: str)`: Evaluates if a goal is well-defined and achievable. It returns one of four statuses:
+    - `assess_goal(goal_id: str)`: Evaluates if a goal is well-defined and achievable. It returns one of four statuses:
         1. The goal is complete.
         2. The goal is ready because all prerequisite goals have been met.
         3. The goal is well-defined, but some prerequisites are not yet complete.
         4. The goal has undefined prerequisites and requires more definition.
+    - `mark_goal_incomplete(goal_id: str)`: Marks a goal as incomplete.
 
 ### Example Workflow
 
@@ -81,9 +82,9 @@ Here is a simple example of how to use the tools to manage a plan:
     - `set_goal(id="build_server", description="Build a simple MCP server", prerequisites=["read_docs"])`
     - `set_goal(id="test_server", description="Test the server with a client", prerequisites=["build_server"])`
     - `set_goal(id="learn_mcp", description="Learn the Model Context Protocol", prerequisites=["test_server"])`
-2.  **Check if your top-level goal is feasible**: `check_goal_feasibility(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete prerequisites, along with a completion summary.
+2.  **Check if your top-level goal is feasible**: `assess_goal(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete prerequisites, along with a completion summary.
 3.  **Execute the plan**:
-    - Begin by getting the steps for the top-level goal: `get_steps_for_goal(goal_id="learn_mcp")` -> Returns a list of steps, starting with the first goal to work on:
+    - Begin by getting the steps for the top-level goal: `plan_goal(goal_id="learn_mcp")` -> Returns a list of steps, starting with the first goal to work on:
       ```json
       [
         "Complete goal: 'read_docs' - Read the FastMCP documentation",
@@ -92,11 +93,11 @@ Here is a simple example of how to use the tools to manage a plan:
         "Complete goal: 'learn_mcp' - Learn the Model Context Protocol"
       ]
       ```
-    - `mark_goal_complete(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nYou may want to call get_steps_for_goal for: build_server"`.
-    - `mark_goal_complete(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nYou may want to call get_steps_for_goal for: test_server"`.
-    - `mark_goal_complete(goal_id="test_server")` -> Returns `"Goal 'test_server' marked as completed.\nYou may want to call get_steps_for_goal for: learn_mcp"`.
+    - `mark_goal_complete(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nYou may want to call plan_goal for: build_server"`.
+    - `mark_goal_complete(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nYou may want to call plan_goal for: test_server"`.
+    - `mark_goal_complete(goal_id="test_server")` -> Returns `"Goal 'test_server' marked as completed.\nYou may want to call plan_goal for: learn_mcp"`.
     - `mark_goal_complete(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' marked as completed."`.
-4.  **Confirm completion**: `check_goal_feasibility(goal_id="learn_mcp")` -> Returns a message that the goal is complete.
+4.  **Confirm completion**: `assess_goal(goal_id="learn_mcp")` -> Returns a message that the goal is complete.
 
 ## Running Tests
 
