@@ -69,6 +69,32 @@ Once configured, your AI coding assistant will be able to use the Conductor MCP 
 You can interact with the server using the following tools:
 
 - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
+- `set_goals(goals: List[Dict])`: Defines or updates multiple goals at once, including their relationships. Accepts an arbitrary dependency graph. If there are cycles in the graph, it will return an error message listing the problematic goal IDs. If any prerequisites are undefined, it will return a warning listing them. Example usage:
+
+    ```python
+    set_goals([
+        {"id": "a", "description": "A"},
+        {"id": "b", "description": "B", "prerequisites": ["a"]},
+        {"id": "c", "description": "C", "prerequisites": ["b"]},
+        {"id": "d", "description": "D", "prerequisites": ["a", "c"]},
+    ])
+    # Returns: "Goals defined."
+    ```
+    If you try to create a deadlock:
+    ```python
+    set_goals([
+        {"id": "x", "description": "X", "prerequisites": ["y"]},
+        {"id": "y", "description": "Y", "prerequisites": ["x"]},
+    ])
+    # Returns: "Deadlock detected in prerequisites. The following goals could not be created due to deadlocks: x, y."
+    ```
+    If you include undefined prerequisites:
+    ```python
+    set_goals([
+        {"id": "z", "description": "Z", "prerequisites": ["not_defined"]},
+    ])
+    # Returns: "Goals defined, but the following prerequisite goals are undefined: not_defined."
+    ```
 - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
 - `plan_goal(goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True)`: Generates an ordered execution plan and, optionally, a Mermaid diagram of the dependency graph. It returns a dictionary with two keys: `plan` (a list of steps) and `diagram` (a string with the Mermaid diagram, or an empty string if `include_diagram` is `False`).
 - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.

@@ -2,7 +2,7 @@ import sys
 import graphlib
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Set, Union
+from typing import List, Dict, Optional, Set, Union, Any
 
 # --- Data Structures ---
 
@@ -380,6 +380,97 @@ def assess_goal(ctx: Context, goal_id: str) -> str:
         f"Completion: {completed_count}/{total_count} ({percentage:.0f}%) goals completed. "
         f"Incomplete prerequisite goals: {', '.join(incomplete_prereqs)}."
     )
+
+@mcp.tool()
+def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
+    """
+    Defines or updates multiple goals at once, including their relationships. Accepts an arbitrary dependency graph.
+
+    Args:
+        goals: A list of dicts, each with 'id', 'description', and optional 'prerequisites' (list of ids).
+
+    Returns:
+        A confirmation message if all goals are defined, or an error message listing problematic goals and reasons.
+    """
+    state = get_session_state(ctx)
+    # Build a combined graph of existing and new goals
+    combined_goals = {**state.goals}
+    new_goal_ids = set()
+    for goal in goals:
+        goal_id = goal['id']
+        new_goal_ids.add(goal_id)
+        combined_goals[goal_id] = Goal(
+            id=goal_id,
+            description=goal.get('description', ''),
+            prerequisites=goal.get('prerequisites', []),
+            completed=state.goals[goal_id].completed if goal_id in state.goals else False
+        )
+
+    # Check for cycles in the combined graph
+    def has_cycle():
+        visited = set()
+        stack = set()
+        def visit(node_id):
+            if node_id in stack:
+                return True
+            if node_id in visited:
+                return False
+            visited.add(node_id)
+            stack.add(node_id)
+            for prereq in combined_goals.get(node_id, Goal(id='', description='')).prerequisites:
+                if visit(prereq):
+                    return True
+            stack.remove(node_id)
+            return False
+        for goal in goals:
+            if visit(goal['id']):
+                return True
+        return False
+
+    if has_cycle():
+        # Find all nodes involved in cycles for error reporting
+        def find_cycle_nodes():
+            visited = set()
+            stack = []
+            cycles = set()
+            def visit(node_id):
+                if node_id in stack:
+                    idx = stack.index(node_id)
+                    cycles.update(stack[idx:])
+                    return
+                if node_id in visited:
+                    return
+                visited.add(node_id)
+                stack.append(node_id)
+                for prereq in combined_goals.get(node_id, Goal(id='', description='')).prerequisites:
+                    visit(prereq)
+                stack.pop()
+            for goal in goals:
+                visit(goal['id'])
+            return cycles
+        cycle_nodes = find_cycle_nodes()
+        return f"Deadlock detected in prerequisites. The following goals could not be created due to deadlocks: {', '.join(sorted(cycle_nodes))}."
+
+    # Add/update all goals
+    for goal in goals:
+        goal_id = goal['id']
+        state.goals[goal_id] = Goal(
+            id=goal_id,
+            description=goal.get('description', ''),
+            prerequisites=goal.get('prerequisites', []),
+            completed=state.goals[goal_id].completed if goal_id in state.goals else False
+        )
+
+    # Check for undefined prerequisites
+    undefined = set()
+    for goal in goals:
+        for prereq in goal.get('prerequisites', []):
+            if prereq not in state.goals:
+                undefined.add(prereq)
+    if undefined:
+        return f"Goals defined, but the following prerequisite goals are undefined: {', '.join(sorted(undefined))}."
+
+    return "Goals defined."
 
 if __name__ == "__main__":
     mcp.run() 

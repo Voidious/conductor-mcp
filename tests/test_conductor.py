@@ -331,3 +331,65 @@ async def test_plan_goal_no_diagram(client: Client):
         "Complete goal: 'goal2' - Goal 2",
     ]
     assert diagram == ""
+
+@pytest.mark.asyncio
+async def test_set_goals(client: Client):
+    """Tests the set_goals tool for batch and graph creation, cycle detection, and error handling."""
+    # 1. Add a simple chain in one call
+    chain = [
+        {"id": "a", "description": "A"},
+        {"id": "b", "description": "B", "prerequisites": ["a"]},
+        {"id": "c", "description": "C", "prerequisites": ["b"]},
+    ]
+    result = await client.call_tool("set_goals", {"goals": chain})
+    assert result[0].text == "Goals defined."
+    # Check that all goals exist
+    for g in ["a", "b", "c"]:
+        assess = await client.call_tool("assess_goal", {"goal_id": g})
+        assert "well-defined" in assess[0].text or "ready" in assess[0].text
+
+    # 2. Add siblings with shared prerequisite
+    siblings = [
+        {"id": "d", "description": "D"},
+        {"id": "e", "description": "E", "prerequisites": ["d"]},
+        {"id": "f", "description": "F", "prerequisites": ["d"]},
+    ]
+    result = await client.call_tool("set_goals", {"goals": siblings})
+    assert result[0].text == "Goals defined."
+    for g in ["d", "e", "f"]:
+        assess = await client.call_tool("assess_goal", {"goal_id": g})
+        assert "well-defined" in assess[0].text or "ready" in assess[0].text
+
+    # 3. Add a complex graph
+    complex_graph = [
+        {"id": "g", "description": "G"},
+        {"id": "h", "description": "H", "prerequisites": ["g", "e"]},
+        {"id": "i", "description": "I", "prerequisites": ["h", "f"]},
+    ]
+    result = await client.call_tool("set_goals", {"goals": complex_graph})
+    assert result[0].text == "Goals defined."
+    for g in ["g", "h", "i"]:
+        assess = await client.call_tool("assess_goal", {"goal_id": g})
+        assert "well-defined" in assess[0].text or "ready" in assess[0].text
+
+    # 4. Cycle detection (should not add any goals)
+    cycle = [
+        {"id": "x", "description": "X", "prerequisites": ["y"]},
+        {"id": "y", "description": "Y", "prerequisites": ["x"]},
+    ]
+    result = await client.call_tool("set_goals", {"goals": cycle})
+    assert "Deadlock detected" in result[0].text
+    # x and y should not exist
+    for g in ["x", "y"]:
+        assess = await client.call_tool("assess_goal", {"goal_id": g})
+        assert "not found" in assess[0].text
+
+    # 5. Undefined prerequisites
+    undefined = [
+        {"id": "z", "description": "Z", "prerequisites": ["not_defined"]},
+    ]
+    result = await client.call_tool("set_goals", {"goals": undefined})
+    assert "undefined" in result[0].text
+    # z should exist, not_defined should not
+    assess_z = await client.call_tool("assess_goal", {"goal_id": "z"})
+    assert "undefined prerequisite goals: not_defined" in assess_z[0].text
