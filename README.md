@@ -64,14 +64,14 @@ Once the installation is complete, you can run the server and start interacting 
 
     - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
     - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
-    - `plan_goal(goal_id: str, max_steps: Optional[int] = None)`: Returns an ordered list of all steps needed to accomplish the goal by running a topological sort on the graph of goals. Each step in the returned list is either to define a missing prerequisite goal or to complete a defined goal.
+    - `plan_goal(goal_id: str, max_steps: Optional[int] = None)`: Generates an ordered execution plan to accomplish a goal. The plan lists the goal and all its prerequisites in the required order of completion.
     - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.
-    - `assess_goal(goal_id: str)`: Evaluates if a goal is well-defined and achievable. It returns one of four statuses:
+    - `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its prerequisites are met. It returns one of four statuses:
         1. The goal is complete.
         2. The goal is ready because all prerequisite goals have been met.
         3. The goal is well-defined, but some prerequisites are not yet complete.
         4. The goal has undefined prerequisites and requires more definition.
-    - `mark_goal_incomplete(goal_id: str)`: Marks a goal as incomplete.
+    - `reopen_goal(goal_id: str)`: Reopens a goal, marking it and any goals that depend on it as incomplete.
 
 ### Example Workflow
 

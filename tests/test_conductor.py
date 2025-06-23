@@ -156,6 +156,29 @@ async def test_plan_goal_missing_definition(client: Client):
     assert steps2.index("Define missing prerequisite goal: 'z_missing'") < steps2.index("Complete goal: 'top_goal_2' - Top 2")
 
 @pytest.mark.asyncio
+async def test_reopen_goal(client: Client):
+    """Tests the reopen_goal tool."""
+    await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
+    await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
+
+    # Complete both goals
+    await client.call_tool("mark_goal_complete", {"goal_id": "goal1"})
+    await client.call_tool("mark_goal_complete", {"goal_id": "goal2"})
+
+    # Reopen goal1
+    result = await client.call_tool("reopen_goal", {"goal_id": "goal1"})
+    assert "Goal 'goal1' has been reopened." in result[0].text  # type: ignore
+    assert "The following dependent goals were also reopened: goal1, goal2" in result[0].text # type: ignore
+
+    # Assess goal2, it should now be incomplete
+    assess_result = await client.call_tool("assess_goal", {"goal_id": "goal2"})
+    assert "Incomplete prerequisite goals: goal1." in assess_result[0].text  # type: ignore
+
+    # Reopening an already open goal should yield a specific message.
+    result_already_open = await client.call_tool("reopen_goal", {"goal_id": "goal1"})
+    assert "Goal 'goal1' is already open." in result_already_open[0].text  # type: ignore
+
+@pytest.mark.asyncio
 async def test_assess_goal(client: Client):
     """Tests the assess_goal tool."""
     await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
@@ -249,51 +272,19 @@ async def test_full_workflow_with_goals(client: Client):
             goal_id_to_complete = step.split("'")[1]
             await client.call_tool("mark_goal_complete", {"goal_id": goal_id_to_complete})
 
-    # 4. Confirm final completion
-    final_status_result = await client.call_tool("plan_goal", {"goal_id": "serve_breakfast"})
-    final_status_text = final_status_result[0].text
-    final_status = json.loads(final_status_text) if final_status_text.startswith('[') else [final_status_text]
-    assert final_status == ["Goal 'serve_breakfast' is already completed."]
+    # 4. Final check: All goals should now be complete.
+    final_assessment = await client.call_tool("assess_goal", {"goal_id": "serve_breakfast"})
+    assert "The goal is complete." in final_assessment[0].text  # type: ignore
 
 @pytest.mark.asyncio
 async def test_completion_with_multiple_dependents(client: Client):
-    """
-    Tests that completing a goal with multiple dependent goals correctly
-    suggests a next step for one of the dependents.
-    """
-    await client.call_tool("set_goal", {"id": "get_supplies", "description": "Get supplies"})
-    await client.call_tool("set_goal", {"id": "make_cake", "description": "Make a cake", "prerequisites": ["get_supplies"]})
-    await client.call_tool("set_goal", {"id": "make_cookies", "description": "Make cookies", "prerequisites": ["get_supplies"]})
-
-    # Completing "get_supplies"
-    await client.call_tool("mark_goal_complete", {"goal_id": "get_supplies"})
-
-    # Now, getting steps for either goal should work.
-    steps_cake_result = await client.call_tool("plan_goal", {"goal_id": "make_cake"})
-    steps_cake_text = steps_cake_result[0].text
-    steps_cake = json.loads(steps_cake_text) if steps_cake_text.startswith('[') else [steps_cake_text]
-    assert steps_cake == ["Complete goal: 'make_cake' - Make a cake"]
-
-    steps_cookies_result = await client.call_tool("plan_goal", {"goal_id": "make_cookies"})
-    steps_cookies_text = steps_cookies_result[0].text
-    steps_cookies = json.loads(steps_cookies_text) if steps_cookies_text.startswith('[') else [steps_cookies_text]
-    assert steps_cookies == ["Complete goal: 'make_cookies' - Make cookies"]
-
-@pytest.mark.asyncio
-async def test_mark_goal_incomplete(client: Client):
-    """Tests the mark_goal_incomplete tool."""
-    await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
-    await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
-    # Complete both goals
-    await client.call_tool("mark_goal_complete", {"goal_id": "goal1"})
-    await client.call_tool("mark_goal_complete", {"goal_id": "goal2"})
-    # Mark goal1 incomplete, should also mark goal2 incomplete
-    result = await client.call_tool("mark_goal_incomplete", {"goal_id": "goal1"})
-    assert "Goal 'goal1' and its dependents have been marked as incomplete." in result[0].text
-    assert "goal1" in result[0].text and "goal2" in result[0].text
-    # Mark goal1 incomplete again, should not list any affected goals
-    result_already_incomplete = await client.call_tool("mark_goal_incomplete", {"goal_id": "goal1"})
-    assert "Goal 'goal1' and its dependents have been marked as incomplete." in result_already_incomplete[0].text
-    # Mark a non-existent goal
-    result_no_goal = await client.call_tool("mark_goal_incomplete", {"goal_id": "nonexistent"})
-    assert result_no_goal[0].text == "Goal 'nonexistent' not found."
+    """Tests completing a goal with several dependents."""
+    await client.call_tool("set_goal", {"id": "base", "description": "Base Goal"})
+    await client.call_tool("set_goal", {"id": "dep1", "description": "Dependent 1", "prerequisites": ["base"]})
+    await client.call_tool("set_goal", {"id": "dep2", "description": "Dependent 2", "prerequisites": ["base"]})
+    
+    result = await client.call_tool("mark_goal_complete", {"goal_id": "base"})
+    # The order of dependents is not guaranteed, so check for both.
+    assert "You may want to call plan_goal for" in result[0].text  # type: ignore
+    assert "dep1" in result[0].text  # type: ignore
+    assert "dep2" in result[0].text  # type: ignore

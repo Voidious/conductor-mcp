@@ -75,7 +75,17 @@ def _find_all_dependents(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]:
 
 @mcp.tool()
 def set_goal(ctx: Context, id: str, description: str, prerequisites: List[str] = []) -> str:
-    """Defines a new goal or updates an existing one, optionally with a list of prerequisite goals."""
+    """
+    Defines a new goal or updates an existing one. Goals are the fundamental building blocks for planning and execution, representing tasks or objectives.
+
+    Args:
+        id: A unique string identifier for the goal (e.g., 'deploy_staging').
+        description: A human-readable summary of what the goal entails.
+        prerequisites: (Optional) A list of goal IDs that must be completed before this goal can be started.
+    
+    Returns:
+        A confirmation message indicating that the goal has been defined.
+    """
     state = get_session_state(ctx)
     
     if _check_for_deadlocks(id, prerequisites, state.goals):
@@ -114,7 +124,16 @@ def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict
 
 @mcp.tool()
 def mark_goal_complete(ctx: Context, goal_id: str, complete_prerequisites: bool = False) -> str:
-    """Marks a goal as completed and suggests next goals to work on. Optionally marks all incomplete prerequisites as completed (recursively)."""
+    """
+    Marks a goal as completed, signifying its successful resolution.
+
+    Args:
+        goal_id: The ID of the goal to mark as complete.
+        complete_prerequisites: (Optional) If True, also marks any of this goal's incomplete prerequisites as completed. Defaults to False.
+
+    Returns:
+        A confirmation message. If completing this goal unblocks other goals, suggests the next goal to work on.
+    """
     state = get_session_state(ctx)
     def _mark_goal_complete_internal(goal_id: str):
         if goal_id not in state.goals:
@@ -155,7 +174,16 @@ def mark_goal_complete(ctx: Context, goal_id: str, complete_prerequisites: bool 
 
 @mcp.tool()
 def add_prerequisite_to_goal(ctx: Context, goal_id: str, prerequisite_id: str) -> str:
-    """Adds a prerequisite to a goal. If the goal or any dependents were complete, marks them as incomplete and indicates this in the response."""
+    """
+    Adds a prerequisite to a goal.
+
+    Args:
+        goal_id: The ID of the goal to which the prerequisite will be added.
+        prerequisite_id: The ID of the prerequisite goal to add.
+    
+    Returns:
+        A confirmation message, indicating if any dependent goals were marked as incomplete.
+    """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
@@ -184,23 +212,38 @@ def add_prerequisite_to_goal(ctx: Context, goal_id: str, prerequisite_id: str) -
     return msg
 
 @mcp.tool()
-def mark_goal_incomplete(ctx: Context, goal_id: str) -> str:
-    """Marks a goal and all dependent goals as incomplete. Indicates if any dependents were updated."""
+def reopen_goal(ctx: Context, goal_id: str) -> str:
+    """
+    Reopens a goal, marking it and any goals that depend on it as incomplete. This is useful if a completed goal needs to be revisited due to new information or changed circumstances.
+
+    Args:
+        goal_id: The ID of the goal to reopen.
+
+    Returns:
+        A confirmation message, indicating if any dependent goals were also marked as incomplete.
+    """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
+    
+    goal = state.goals[goal_id]
+    if not goal.completed:
+        return f"Goal '{goal_id}' is already open."
+
     affected = set()
     if state.goals[goal_id].completed:
         state.goals[goal_id].completed = False
         affected.add(goal_id)
+    
     dependents = _find_all_dependents(goal_id, state.goals)
     for dep_id in dependents:
         if state.goals[dep_id].completed:
             state.goals[dep_id].completed = False
             affected.add(dep_id)
-    msg = f"Goal '{goal_id}' and its dependents have been marked as incomplete."
+    
+    msg = f"Goal '{goal_id}' has been reopened."
     if affected:
-        msg += f" The following goals were marked as incomplete: {', '.join(sorted(affected))}."
+        msg += f" The following dependent goals were also reopened: {', '.join(sorted(affected))}."
     return msg
 
 def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]:
@@ -215,10 +258,14 @@ def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]
 @mcp.tool()
 def plan_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None) -> List[str]:
     """
-    Returns an ordered list of all steps needed to accomplish the goal.
-    This is achieved by running a topological sort on the graph of goals.
-    Each step in the returned list is either to define a missing prerequisite
-    goal or to complete a defined goal.
+    Generates an ordered execution plan to accomplish a goal. The plan lists the goal and all its prerequisites in the required order of completion.
+
+    Args:
+        goal_id: The ID of the final goal you want to achieve.
+        max_steps: (Optional) The maximum number of steps (goals) to include in the returned plan.
+    
+    Returns:
+        An ordered list of goal descriptions that must be completed.
     """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
@@ -264,7 +311,15 @@ def plan_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None) -> Li
 
 @mcp.tool()
 def assess_goal(ctx: Context, goal_id: str) -> str:
-    """Evaluates if a goal is feasible and provides a status of its prerequisites."""
+    """
+    Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its prerequisites are met.
+
+    Args:
+        goal_id: The ID of the goal to check.
+
+    Returns:
+        A human-readable string summarizing the goal's status (e.g., 'Completed', 'Blocked by prerequisites', 'Ready to be worked on').
+    """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
