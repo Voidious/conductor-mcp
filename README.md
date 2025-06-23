@@ -54,14 +54,23 @@ Conductor MCP is designed to be used as a server with an MCP-compatible client, 
 
 To configure the server, find the "MCP Tools" or "MCP Servers" settings in your editor's configuration. Then, add a new server configuration block like this:
 
+**For macOS/Linux/Windows (Git Bash/WSL/Cygwin):**
 ```json
 "conductor": {
-  "command": "python",
-  "args": ["/path/to/your/clone/of/conductor-mcp/main.py"]
+  "command": "/path/to/your/clone/of/conductor-mcp/run.sh"
 }
 ```
 
-Make sure to replace `/path/to/your/clone/of/conductor-mcp/main.py` with the actual path to the `main.py` file in your cloned repository.
+**For Windows (Command Prompt or PowerShell):**
+```json
+"conductor": {
+  "command": "C:\\path\\to\\your\\clone\\of\\conductor-mcp\\run.bat"
+}
+```
+
+Make sure to replace the path with the actual location of the script in your cloned repository. The script will automatically activate the virtual environment and run the server.
+
+**Note:** Use `run.sh` for Unix-like shells (macOS, Linux, Git Bash, WSL, Cygwin) and `run.bat` for native Windows Command Prompt or PowerShell.
 
 Once configured, your AI coding assistant will be able to use the Conductor MCP tools.
 
