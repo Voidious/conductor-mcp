@@ -232,15 +232,14 @@ async def test_completion_with_multiple_dependents(client: Client):
     assert cake_next in result_text or cookies_next in result_text
 
 @pytest.mark.asyncio
-async def test_get_next_goal_blocked_by_missing_definition(client: Client):
+async def test_next_goal_in_workflow_blocked_by_missing_definition(client: Client):
     """Tests that next_goal_in_workflow correctly identifies a missing prerequisite goal definition."""
+    # Test with one missing prerequisite
     await client.call_tool("set_goal", {"id": "top_goal", "description": "Top", "prerequisites": ["missing_goal"]})
-    
-    # get_next_goal should not return anything as the prereq is not defined. But feasibility should fail.
-    # This is a key difference in the new model. The agent must use check_goal_feasibility.
-    feasibility = await client.call_tool("check_goal_feasibility", {"goal_id": "top_goal"})
-    assert "has undefined prerequisite goals" in feasibility[0].text  # type: ignore
-    assert "missing_goal" in feasibility[0].text  # type: ignore
-
     next_goal = await client.call_tool("next_goal_in_workflow", {"goal_id": "top_goal"})
-    assert "is blocked" in next_goal[0].text  # type: ignore
+    assert next_goal[0].text == "Goal 'top_goal' is blocked. Please define prerequisite goal 'missing_goal'."  # type: ignore
+
+    # Test with multiple missing prerequisites, ensuring it picks the first one alphabetically
+    await client.call_tool("set_goal", {"id": "top_goal_2", "description": "Top 2", "prerequisites": ["z_missing", "a_missing"]})
+    next_goal_2 = await client.call_tool("next_goal_in_workflow", {"goal_id": "top_goal_2"})
+    assert next_goal_2[0].text == "Goal 'top_goal_2' is blocked. Please define prerequisite goal 'a_missing'."  # type: ignore

@@ -173,6 +173,12 @@ def _next_goal_in_workflow_logic(ctx: Context, goal_id: str) -> str:
         return f"Goal '{goal_id}' is completed."
 
     all_prereqs = _get_all_prerequisites(goal_id, state.goals)
+    
+    # For determinism, check for undefined prerequisites on a sorted list.
+    undefined_prereq = next((p for p in sorted(list(all_prereqs)) if p not in state.goals), None)
+    if undefined_prereq:
+        return f"Goal '{goal_id}' is blocked. Please define prerequisite goal '{undefined_prereq}'."
+
     all_prereqs.add(goal_id)
 
     for current_goal_id in sorted(list(all_prereqs)):
@@ -192,7 +198,11 @@ def _next_goal_in_workflow_logic(ctx: Context, goal_id: str) -> str:
 
 @mcp.tool()
 def next_goal_in_workflow(ctx: Context, goal_id: str) -> str:
-    """Finds the next available goal to work on in order to complete the given goal."""
+    """
+    Finds the next available goal to work on to complete the given goal. If any
+    prerequisite goals are not defined, the next task is to define a missing
+    prerequisite.
+    """
     return _next_goal_in_workflow_logic(ctx, goal_id)
 
 @mcp.tool()

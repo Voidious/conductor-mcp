@@ -64,7 +64,7 @@ Once the installation is complete, you can run the server and start interacting 
 
     - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
     - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
-    - `next_goal_in_workflow(goal_id: str)`: Finds the next available goal to work on to complete the given top-level goal.
+    - `next_goal_in_workflow(goal_id: str)`: Finds the next available goal to work on to complete the given goal. If any prerequisite goals are not defined, the next task is to define a missing prerequisite.
     - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this unblocks another goal, it will return the next actionable step.
     - `check_goal_feasibility(goal_id: str)`: Evaluates if a goal is well-defined and achievable. It returns one of four statuses:
         1. The goal is complete.
