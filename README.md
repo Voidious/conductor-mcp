@@ -62,29 +62,33 @@ Once the installation is complete, you can run the server and start interacting 
 2.  **Available Tools**:
     You can interact with the server using the following tools:
 
-    - `define_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal, optionally with a list of prerequisite goals.
-    - `define_prerequisite(goal_id: str, prerequisite_id: str)`: Defines a new prerequisite for an existing goal.
-    - `get_next_goal(goal_id: str)`: Finds the next available goal to work on in order to complete the given goal.
-    - `complete_goal(goal_id: str)`: Marks a goal as completed and returns the next available goal in the workflow, if there is one.
-    - `evaluate_feasibility(goal_id: str)`: Evaluates if a goal is feasible by checking for unknown prerequisites.
+    - `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
+    - `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
+    - `next_goal_in_workflow(goal_id: str)`: Finds the next available goal to work on to complete the given top-level goal.
+    - `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this unblocks another goal, it will return the next actionable step.
+    - `check_goal_feasibility(goal_id: str)`: Evaluates if a goal is well-defined and achievable. It returns one of four statuses:
+        1. The goal is complete.
+        2. The goal is ready because all prerequisite goals have been met.
+        3. The goal is well-defined, but some prerequisites are not yet complete.
+        4. The goal has undefined prerequisites and requires more definition.
 
 ### Example Workflow
 
 Here is a simple example of how to use the tools to manage a plan:
 
 1.  **Define all your goals**:
-    - `define_goal(id="read_docs", description="Read the FastMCP documentation")`
-    - `define_goal(id="build_server", description="Build a simple MCP server", prerequisites=["read_docs"])`
-    - `define_goal(id="test_server", description="Test the server with a client", prerequisites=["build_server"])`
-    - `define_goal(id="learn_mcp", description="Learn the Model Context Protocol", prerequisites=["test_server"])`
-2.  **Check if your top-level goal is feasible**: `evaluate_feasibility(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' appears feasible."`.
+    - `set_goal(id="read_docs", description="Read the FastMCP documentation")`
+    - `set_goal(id="build_server", description="Build a simple MCP server", prerequisites=["read_docs"])`
+    - `set_goal(id="test_server", description="Test the server with a client", prerequisites=["build_server"])`
+    - `set_goal(id="learn_mcp", description="Learn the Model Context Protocol", prerequisites=["test_server"])`
+2.  **Check if your top-level goal is feasible**: `check_goal_feasibility(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete prerequisites, along with a completion summary.
 3.  **Execute the plan**:
-    - Begin by finding the first goal to work on: `get_next_goal(goal_id="learn_mcp")` -> Returns `"Next goal for 'learn_mcp': read_docs - Read the FastMCP documentation"`.
-    - `complete_goal(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nNext goal for 'build_server': build_server - Build a simple MCP server"`.
-    - `complete_goal(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nNext goal for 'test_server': test_server - Test the server with a client"`.
-    - `complete_goal(goal_id="test_server")` -> Returns `"Goal 'test_server' marked as completed.\nNext goal for 'learn_mcp': learn_mcp - Learn the Model Context Protocol"`.
-    - `complete_goal(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' marked as completed."`.
-4.  **Confirm completion**: `get_next_goal(goal_id="learn_mcp")` -> Returns a message that the goal is already complete.
+    - Begin by finding the first goal to work on: `next_goal_in_workflow(goal_id="learn_mcp")` -> Returns `"Next goal for 'learn_mcp': read_docs - Read the FastMCP documentation"`.
+    - `mark_goal_complete(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nNext goal for 'build_server': build_server - Build a simple MCP server"`.
+    - `mark_goal_complete(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nNext goal for 'test_server': test_server - Test the server with a client"`.
+    - `mark_goal_complete(goal_id="test_server")` -> Returns `"Goal 'test_server' marked as completed.\nNext goal for 'learn_mcp': learn_mcp - Learn the Model Context Protocol"`.
+    - `mark_goal_complete(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' marked as completed."`.
+4.  **Confirm completion**: `check_goal_feasibility(goal_id="learn_mcp")` -> Returns a message that the goal is complete.
 
 ## Running Tests
 

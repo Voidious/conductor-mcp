@@ -63,16 +63,19 @@ def _reset_state(ctx: Context) -> str:
     return "State has been reset."
 
 @mcp.tool()
-def define_goal(ctx: Context, id: str, description: str, prerequisites: List[str] = []) -> str:
-    """Defines a new goal, optionally with a list of prerequisite goals."""
+def set_goal(ctx: Context, id: str, description: str, prerequisites: List[str] = []) -> str:
+    """Defines a new goal or updates an existing one, optionally with a list of prerequisite goals."""
     state = get_session_state(ctx)
-    if id in state.goals:
-        return f"Goal '{id}' already exists."
     
     if _check_for_deadlocks(id, prerequisites, state.goals):
         return f"Goal '{id}' would create a deadlock and was not added."
     
     state.goals[id] = Goal(id=id, description=description, prerequisites=prerequisites)
+    
+    undefined_prerequisites = [p for p in prerequisites if p not in state.goals]
+    if undefined_prerequisites:
+        return f"Goal '{id}' defined with the following undefined prerequisite goals: {', '.join(undefined_prerequisites)}."
+    
     return f"Goal '{id}' defined."
 
 def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict[str, Goal]) -> bool:
@@ -99,7 +102,7 @@ def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict
     return check_node(goal_id)
 
 @mcp.tool()
-def complete_goal(ctx: Context, goal_id: str) -> str:
+def mark_goal_complete(ctx: Context, goal_id: str) -> str:
     """
     Marks a goal as completed and returns the next available goal in the
     workflow, if there is one.
@@ -124,33 +127,31 @@ def complete_goal(ctx: Context, goal_id: str) -> str:
             break
     
     if dependent_goal_id:
-        next_goal_message = _get_next_goal_logic(ctx, dependent_goal_id)
+        next_goal_message = _next_goal_in_workflow_logic(ctx, dependent_goal_id)
         return f"{completion_message}.\n{next_goal_message}"
     
     return f"{completion_message}."
 
 @mcp.tool()
-def define_prerequisite(ctx: Context, goal_id: str, prerequisite_id: str) -> str:
-    """Defines a new prerequisite for an existing goal."""
+def add_prerequisite_to_goal(ctx: Context, goal_id: str, prerequisite_id: str) -> str:
+    """Adds a prerequisite to a goal."""
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
-    if prerequisite_id not in state.goals:
-        return f"Prerequisite goal '{prerequisite_id}' not found."
     if goal_id == prerequisite_id:
         return f"Goal '{goal_id}' cannot have itself as a prerequisite."
 
     goal = state.goals[goal_id]
     
     if prerequisite_id in goal.prerequisites:
-        return f"Prerequisite '{prerequisite_id}' already exists for goal '{goal_id}'."
+        return f"Prerequisite goal '{prerequisite_id}' already exists for goal '{goal_id}'."
 
     new_prerequisites = goal.prerequisites + [prerequisite_id]
     if _check_for_deadlocks(goal_id, new_prerequisites, state.goals):
-        return f"Adding prerequisite '{prerequisite_id}' to goal '{goal_id}' would create a deadlock."
+        return f"Adding prerequisite goal '{prerequisite_id}' to goal '{goal_id}' would create a deadlock."
 
     goal.prerequisites.append(prerequisite_id)
-    return f"Added prerequisite '{prerequisite_id}' to goal '{goal_id}'."
+    return f"Added prerequisite goal '{prerequisite_id}' to goal '{goal_id}'."
 
 def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]:
     """Recursively fetches all prerequisites for a given goal."""
@@ -161,7 +162,7 @@ def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]
             prereqs.update(_get_all_prerequisites(prereq_id, all_goals))
     return prereqs
 
-def _get_next_goal_logic(ctx: Context, goal_id: str) -> str:
+def _next_goal_in_workflow_logic(ctx: Context, goal_id: str) -> str:
     """Contains the core logic for finding the next available goal."""
     state = get_session_state(ctx)
     if goal_id not in state.goals:
@@ -169,7 +170,7 @@ def _get_next_goal_logic(ctx: Context, goal_id: str) -> str:
 
     top_level_goal = state.goals[goal_id]
     if top_level_goal.completed:
-        return f"Goal '{goal_id}' is already completed."
+        return f"Goal '{goal_id}' is completed."
 
     all_prereqs = _get_all_prerequisites(goal_id, state.goals)
     all_prereqs.add(goal_id)
@@ -190,24 +191,42 @@ def _get_next_goal_logic(ctx: Context, goal_id: str) -> str:
     return f"Goal '{goal_id}' is blocked because no actionable task could be found in its dependency tree."
 
 @mcp.tool()
-def get_next_goal(ctx: Context, goal_id: str) -> str:
+def next_goal_in_workflow(ctx: Context, goal_id: str) -> str:
     """Finds the next available goal to work on in order to complete the given goal."""
-    return _get_next_goal_logic(ctx, goal_id)
+    return _next_goal_in_workflow_logic(ctx, goal_id)
 
 @mcp.tool()
-def evaluate_feasibility(ctx: Context, goal_id: str) -> str:
-    """Evaluates if a goal is feasible by checking for unknown prerequisites."""
+def check_goal_feasibility(ctx: Context, goal_id: str) -> str:
+    """Evaluates if a goal is feasible and provides a status of its prerequisites."""
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
 
-    all_prereqs = _get_all_prerequisites(goal_id, state.goals)
-    unknown_prereqs = [prereq for prereq in all_prereqs if prereq not in state.goals]
+    goal = state.goals[goal_id]
+    if goal.completed:
+        return "The goal is complete."
 
-    if unknown_prereqs:
-        return f"Goal '{goal_id}' is NOT feasible. Unknown prerequisites: {sorted(list(set(unknown_prereqs)))}"
-    else:
-        return f"Goal '{goal_id}' appears feasible."
+    all_prereqs = _get_all_prerequisites(goal_id, state.goals)
+    undefined_prereqs = sorted([p for p in all_prereqs if p not in state.goals])
+
+    if undefined_prereqs:
+        return f"The goal has undefined prerequisite goals: {', '.join(undefined_prereqs)}. More work is required to properly define the goal."
+
+    all_goals_in_workflow = all_prereqs.union({goal_id})
+    incomplete_prereqs = sorted([g for g in all_prereqs if g in state.goals and not state.goals[g].completed])
+
+    if not incomplete_prereqs:
+        return f"All prerequisite goals are met. The goal is ready: {goal.description}"
+
+    completed_count = len(all_goals_in_workflow) - len(incomplete_prereqs) -1
+    total_count = len(all_goals_in_workflow)
+    percentage = (completed_count / total_count) * 100
+
+    return (
+        f"The goal is well-defined, but some prerequisite goals are incomplete. "
+        f"Completion: {completed_count}/{total_count} ({percentage:.0f}%) goals completed. "
+        f"Incomplete prerequisite goals: {', '.join(incomplete_prereqs)}."
+    )
 
 if __name__ == "__main__":
     mcp.run() 
