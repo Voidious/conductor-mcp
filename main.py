@@ -1,7 +1,8 @@
 import sys
+import graphlib
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Union
 
 # --- Data Structures ---
 
@@ -103,10 +104,7 @@ def _check_for_deadlocks(goal_id: str, prerequisites: List[str], all_goals: Dict
 
 @mcp.tool()
 def mark_goal_complete(ctx: Context, goal_id: str) -> str:
-    """
-    Marks a goal as completed and returns the next available goal in the
-    workflow, if there is one.
-    """
+    """Marks a goal as completed and suggests next goals to work on."""
     state = get_session_state(ctx)
     if goal_id not in state.goals:
         return f"Goal '{goal_id}' not found."
@@ -116,21 +114,14 @@ def mark_goal_complete(ctx: Context, goal_id: str) -> str:
          return f"Goal '{goal_id}' was already completed."
 
     state.goals[goal_id].completed = True
-    completion_message = f"Goal '{goal_id}' marked as completed"
+    completion_message = f"Goal '{goal_id}' marked as completed."
 
-    # Find a dependent goal to determine the next step in the workflow.
-    dependent_goal_id = None
-    for g_id in state.goals:
-        g = state.goals[g_id]
-        if goal_id in g.prerequisites:
-            dependent_goal_id = g_id
-            break
-    
-    if dependent_goal_id:
-        next_goal_message = _next_goal_in_workflow_logic(ctx, dependent_goal_id)
-        return f"{completion_message}.\n{next_goal_message}"
-    
-    return f"{completion_message}."
+    # Find goals that depend on this one
+    dependents = [g.id for g in state.goals.values() if goal_id in g.prerequisites]
+    if dependents:
+        return completion_message + "\nYou may want to call get_steps_for_goal for: " + ", ".join(dependents)
+    else:
+        return completion_message
 
 @mcp.tool()
 def add_prerequisite_to_goal(ctx: Context, goal_id: str, prerequisite_id: str) -> str:
@@ -162,48 +153,66 @@ def _get_all_prerequisites(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]
             prereqs.update(_get_all_prerequisites(prereq_id, all_goals))
     return prereqs
 
-def _next_goal_in_workflow_logic(ctx: Context, goal_id: str) -> str:
-    """Contains the core logic for finding the next available goal."""
+@mcp.tool()
+def get_steps_for_goal(ctx: Context, goal_id: str, max_steps: Optional[int] = None) -> List[str]:
+    """
+    Returns an ordered list of all steps needed to accomplish the goal.
+
+    This is achieved by running a topological sort on the graph of goals.
+    Each step in the returned list is either to define a missing prerequisite
+    goal or to complete a defined goal.
+    """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
-        return f"Goal '{goal_id}' not found."
+        return [f"Goal '{goal_id}' not found."]
 
-    top_level_goal = state.goals[goal_id]
-    if top_level_goal.completed:
-        return f"Goal '{goal_id}' is completed."
+    goal = state.goals[goal_id]
+    if goal.completed:
+        return [f"Goal '{goal_id}' is already completed."]
 
-    all_prereqs = _get_all_prerequisites(goal_id, state.goals)
-    
-    # For determinism, check for undefined prerequisites on a sorted list.
-    undefined_prereq = next((p for p in sorted(list(all_prereqs)) if p not in state.goals), None)
-    if undefined_prereq:
-        return f"Goal '{goal_id}' is blocked. Please define prerequisite goal '{undefined_prereq}'."
+    nodes = set()
+    queue = [goal_id]
+    visited = set()
 
-    all_prereqs.add(goal_id)
-
-    for current_goal_id in sorted(list(all_prereqs)):
-        current_goal = state.goals.get(current_goal_id)
-        if not current_goal or current_goal.completed:
+    while queue:
+        current_id = queue.pop(0)
+        if current_id in visited:
             continue
-
-        prerequisites_met = all(
-            state.goals.get(prereq_id, Goal(id="", description="")).completed
-            for prereq_id in current_goal.prerequisites
-        )
         
-        if prerequisites_met:
-            return f"Next goal for '{goal_id}': {current_goal.id} - {current_goal.description}"
+        visited.add(current_id)
+        nodes.add(current_id)
 
-    return f"Goal '{goal_id}' is blocked because no actionable task could be found in its dependency tree."
+        if current_id in state.goals:
+            for prereq in state.goals[current_id].prerequisites:
+                queue.append(prereq)
+    
+    graph = {}
+    for node_id in nodes:
+        if node_id in state.goals:
+            graph[node_id] = state.goals[node_id].prerequisites
+        else:
+            graph[node_id] = []
 
-@mcp.tool()
-def next_goal_in_workflow(ctx: Context, goal_id: str) -> str:
-    """
-    Finds the next available goal to work on to complete the given goal. If any
-    prerequisite goals are not defined, the next task is to define a missing
-    prerequisite.
-    """
-    return _next_goal_in_workflow_logic(ctx, goal_id)
+    try:
+        ts = graphlib.TopologicalSorter(graph)
+        sorted_goals = list(ts.static_order())
+    except graphlib.CycleError:
+        return ["Error: A deadlock was detected in the goal dependencies. Please review your goals and prerequisites."]
+
+    steps = []
+    for g_id in sorted_goals:
+        g = state.goals.get(g_id)
+        if not g:
+            steps.append(f"Define missing prerequisite goal: '{g_id}'")
+            steps.append(f"Complete prerequisites for goal: '{g_id}'")
+            steps.append(f"Complete goal: '{g_id}' - Details to be determined.")
+        elif not g.completed:
+            steps.append(f"Complete goal: '{g_id}' - {g.description}")
+    
+    if max_steps is not None:
+        return steps[:max_steps]
+    
+    return steps
 
 @mcp.tool()
 def check_goal_feasibility(ctx: Context, goal_id: str) -> str:

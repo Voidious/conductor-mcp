@@ -1,6 +1,7 @@
 import pytest
 from fastmcp import Client
 import importlib
+import json
 import main
 from main import ConductorMCP
 
@@ -62,10 +63,9 @@ async def test_mark_goal_complete(client: Client):
     await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
     await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
 
-    # Test completing a goal that unblocks another.
+    # Test completing a goal.
     result = await client.call_tool("mark_goal_complete", {"goal_id": "goal1"})
-    assert "Goal 'goal1' marked as completed" in result[0].text  # type: ignore
-    assert "Next goal for 'goal2': goal2 - Goal 2" in result[0].text  # type: ignore
+    assert result[0].text == "Goal 'goal1' marked as completed.\nYou may want to call get_steps_for_goal for: goal2"  # type: ignore
 
     # Test completing a goal that was already completed.
     result_already_done = await client.call_tool("mark_goal_complete", {"goal_id": "goal1"})
@@ -81,31 +81,79 @@ async def test_mark_goal_complete(client: Client):
     assert result_no_goal[0].text == "Goal 'nonexistent' not found."  # type: ignore
 
 @pytest.mark.asyncio
-async def test_next_goal_in_workflow(client: Client):
-    """Tests the next_goal_in_workflow tool logic."""
+async def test_get_steps_for_goal(client: Client):
+    """Tests the get_steps_for_goal tool logic."""
     await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
     await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
 
-    # The first available sub-goal for goal2 is goal1
-    result = await client.call_tool("next_goal_in_workflow", {"goal_id": "goal2"})
-    assert result[0].text == "Next goal for 'goal2': goal1 - Goal 1"  # type: ignore
+    # The steps for goal2 should be goal1, then goal2
+    result = await client.call_tool("get_steps_for_goal", {"goal_id": "goal2"})
+    steps_text = result[0].text
+    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    assert steps == [
+        "Complete goal: 'goal1' - Goal 1",
+        "Complete goal: 'goal2' - Goal 2",
+    ]
 
-    # Complete goal1, making goal2 itself the next goal
+    # Complete goal1, so only goal2 should be left
     await client.call_tool("mark_goal_complete", {"goal_id": "goal1"})
-    result_unblocked = await client.call_tool("next_goal_in_workflow", {"goal_id": "goal2"})
-    assert result_unblocked[0].text == "Next goal for 'goal2': goal2 - Goal 2"  # type: ignore
+    result_unblocked = await client.call_tool("get_steps_for_goal", {"goal_id": "goal2"})
+    steps_unblocked_text = result_unblocked[0].text
+    steps_unblocked = json.loads(steps_unblocked_text) if steps_unblocked_text.startswith('[') else [steps_unblocked_text]
+    assert steps_unblocked == ["Complete goal: 'goal2' - Goal 2"]
 
-    # Complete goal2, no goals should be left
+    # Complete goal2, no steps should be left
     await client.call_tool("mark_goal_complete", {"goal_id": "goal2"})
-    result_complete = await client.call_tool("next_goal_in_workflow", {"goal_id": "goal2"})
-    assert result_complete[0].text == "Goal 'goal2' is completed."  # type: ignore
+    result_complete = await client.call_tool("get_steps_for_goal", {"goal_id": "goal2"})
+    steps_complete_text = result_complete[0].text
+    steps_complete = json.loads(steps_complete_text) if steps_complete_text.startswith('[') else [steps_complete_text]
+    assert steps_complete == ["Goal 'goal2' is already completed."]
 
 @pytest.mark.asyncio
-async def test_next_goal_in_workflow_no_prereqs(client: Client):
-    """Tests that a goal with no prerequisites is its own next goal."""
+async def test_get_steps_for_goal_no_prereqs(client: Client):
+    """Tests that a goal with no prerequisites is its own step."""
     await client.call_tool("set_goal", {"id": "goal_simple", "description": "Simple Goal"})
-    result = await client.call_tool("next_goal_in_workflow", {"goal_id": "goal_simple"})
-    assert result[0].text == "Next goal for 'goal_simple': goal_simple - Simple Goal"  # type: ignore
+    result = await client.call_tool("get_steps_for_goal", {"goal_id": "goal_simple"})
+    steps_text = result[0].text
+    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    assert steps == ["Complete goal: 'goal_simple' - Simple Goal"]
+
+@pytest.mark.asyncio
+async def test_get_steps_for_goal_max_steps(client: Client):
+    """Tests the max_steps parameter of get_steps_for_goal."""
+    await client.call_tool("set_goal", {"id": "goal1", "description": "Goal 1"})
+    await client.call_tool("set_goal", {"id": "goal2", "description": "Goal 2", "prerequisites": ["goal1"]})
+    
+    result = await client.call_tool("get_steps_for_goal", {"goal_id": "goal2", "max_steps": 1})
+    steps_text = result[0].text
+    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    assert steps == ["Complete goal: 'goal1' - Goal 1"]
+
+@pytest.mark.asyncio
+async def test_get_steps_for_goal_missing_definition(client: Client):
+    """Tests that get_steps_for_goal correctly identifies a missing prerequisite goal definition."""
+    await client.call_tool("set_goal", {"id": "top_goal", "description": "Top", "prerequisites": ["missing_goal"]})
+    result = await client.call_tool("get_steps_for_goal", {"goal_id": "top_goal"})
+    steps_text = result[0].text
+    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
+    assert steps == [
+        "Define missing prerequisite goal: 'missing_goal'",
+        "Complete prerequisites for goal: 'missing_goal'",
+        "Complete goal: 'missing_goal' - Details to be determined.",
+        "Complete goal: 'top_goal' - Top",
+    ]
+
+    # Test with multiple missing prerequisites, ensuring it orders them correctly.
+    await client.call_tool("set_goal", {"id": "top_goal_2", "description": "Top 2", "prerequisites": ["z_missing", "a_missing"]})
+    result2 = await client.call_tool("get_steps_for_goal", {"goal_id": "top_goal_2"})
+    steps2_text = result2[0].text
+    steps2 = json.loads(steps2_text) if steps2_text.startswith('[') else [steps2_text]
+    # The order of undefined goals depends on graph traversal, but they must come before goals that depend on them.
+    assert "Define missing prerequisite goal: 'z_missing'" in steps2
+    assert "Define missing prerequisite goal: 'a_missing'" in steps2
+    assert "Complete goal: 'top_goal_2' - Top 2" in steps2
+    assert steps2.index("Define missing prerequisite goal: 'a_missing'") < steps2.index("Complete goal: 'top_goal_2' - Top 2")
+    assert steps2.index("Define missing prerequisite goal: 'z_missing'") < steps2.index("Complete goal: 'top_goal_2' - Top 2")
 
 @pytest.mark.asyncio
 async def test_check_goal_feasibility(client: Client):
@@ -182,33 +230,30 @@ async def test_full_workflow_with_goals(client: Client):
     feasibility_result = await client.call_tool("check_goal_feasibility", {"goal_id": "serve_breakfast"})
     assert "The goal is well-defined, but some prerequisite goals are incomplete." in feasibility_result[0].text  # type: ignore
 
-    # 3. Execute goals by following the next_goal_in_workflow and mark_goal_complete prompts
+    # 3. Execute goals by following the get_steps_for_goal and mark_goal_complete prompts
     # Start with the top-level goal to find the first action
-    next_goal_str = await client.call_tool("next_goal_in_workflow", {"goal_id": "serve_breakfast"})
-    assert "boil_water" in next_goal_str[0].text or "toast_bread" in next_goal_str[0].text  # type: ignore # Order is not guaranteed
-
-    # Complete the un-ordered goals first and follow prompts
-    completion_1 = await client.call_tool("mark_goal_complete", {"goal_id": "toast_bread"})
-    assert "butter_toast" in completion_1[0].text # type: ignore
-
-    completion_2 = await client.call_tool("mark_goal_complete", {"goal_id": "boil_water"})
-    assert "brew_tea" in completion_2[0].text # type: ignore
-
-    # Now complete the next set of goals. The order doesn't matter.
-    await client.call_tool("mark_goal_complete", {"goal_id": "brew_tea"})
+    steps_result = await client.call_tool("get_steps_for_goal", {"goal_id": "serve_breakfast"})
+    steps_text = steps_result[0].text
+    steps = json.loads(steps_text) if steps_text.startswith('[') else [steps_text]
     
-    # After butter_toast is done, the next goal for serve_breakfast should be serve_breakfast itself.
-    completion_4 = await client.call_tool("mark_goal_complete", {"goal_id": "butter_toast"})
-    assert "serve_breakfast" in completion_4[0].text # type: ignore
-    
-    # Finally, complete the 'serve_breakfast' goal itself
-    completion_5 = await client.call_tool("mark_goal_complete", {"goal_id": "serve_breakfast"})
-    assert "marked as completed" in completion_5[0].text  # type: ignore
-    assert "Next goal" not in completion_5[0].text # It has no dependents
+    # The first steps should be to complete the base goals. Order is not guaranteed.
+    assert "Complete goal: 'toast_bread' - Toast a slice of bread" in steps
+    assert "Complete goal: 'boil_water' - Boil water for tea" in steps
+
+    # Let's complete the goals one by one according to the steps
+    for step in steps:
+        if "Define" in step:
+            # This test case has no undefined goals
+            pass
+        elif "Complete" in step:
+            goal_id_to_complete = step.split("'")[1]
+            await client.call_tool("mark_goal_complete", {"goal_id": goal_id_to_complete})
 
     # 4. Confirm final completion
-    final_status = await client.call_tool("next_goal_in_workflow", {"goal_id": "serve_breakfast"})
-    assert "is completed" in final_status[0].text  # type: ignore
+    final_status_result = await client.call_tool("get_steps_for_goal", {"goal_id": "serve_breakfast"})
+    final_status_text = final_status_result[0].text
+    final_status = json.loads(final_status_text) if final_status_text.startswith('[') else [final_status_text]
+    assert final_status == ["Goal 'serve_breakfast' is already completed."]
 
 @pytest.mark.asyncio
 async def test_completion_with_multiple_dependents(client: Client):
@@ -220,26 +265,16 @@ async def test_completion_with_multiple_dependents(client: Client):
     await client.call_tool("set_goal", {"id": "make_cake", "description": "Make a cake", "prerequisites": ["get_supplies"]})
     await client.call_tool("set_goal", {"id": "make_cookies", "description": "Make cookies", "prerequisites": ["get_supplies"]})
 
-    # Completing "get_supplies" could lead to either "make_cake" or "make_cookies"
-    result = await client.call_tool("mark_goal_complete", {"goal_id": "get_supplies"})
-    result_text = result[0].text  # type: ignore
-    
-    assert "Goal 'get_supplies' marked as completed" in result_text
-    
-    cake_next = "Next goal for 'make_cake': make_cake - Make a cake"
-    cookies_next = "Next goal for 'make_cookies': make_cookies - Make cookies"
-    
-    assert cake_next in result_text or cookies_next in result_text
+    # Completing "get_supplies"
+    await client.call_tool("mark_goal_complete", {"goal_id": "get_supplies"})
 
-@pytest.mark.asyncio
-async def test_next_goal_in_workflow_blocked_by_missing_definition(client: Client):
-    """Tests that next_goal_in_workflow correctly identifies a missing prerequisite goal definition."""
-    # Test with one missing prerequisite
-    await client.call_tool("set_goal", {"id": "top_goal", "description": "Top", "prerequisites": ["missing_goal"]})
-    next_goal = await client.call_tool("next_goal_in_workflow", {"goal_id": "top_goal"})
-    assert next_goal[0].text == "Goal 'top_goal' is blocked. Please define prerequisite goal 'missing_goal'."  # type: ignore
+    # Now, getting steps for either goal should work.
+    steps_cake_result = await client.call_tool("get_steps_for_goal", {"goal_id": "make_cake"})
+    steps_cake_text = steps_cake_result[0].text
+    steps_cake = json.loads(steps_cake_text) if steps_cake_text.startswith('[') else [steps_cake_text]
+    assert steps_cake == ["Complete goal: 'make_cake' - Make a cake"]
 
-    # Test with multiple missing prerequisites, ensuring it picks the first one alphabetically
-    await client.call_tool("set_goal", {"id": "top_goal_2", "description": "Top 2", "prerequisites": ["z_missing", "a_missing"]})
-    next_goal_2 = await client.call_tool("next_goal_in_workflow", {"goal_id": "top_goal_2"})
-    assert next_goal_2[0].text == "Goal 'top_goal_2' is blocked. Please define prerequisite goal 'a_missing'."  # type: ignore
+    steps_cookies_result = await client.call_tool("get_steps_for_goal", {"goal_id": "make_cookies"})
+    steps_cookies_text = steps_cookies_result[0].text
+    steps_cookies = json.loads(steps_cookies_text) if steps_cookies_text.startswith('[') else [steps_cookies_text]
+    assert steps_cookies == ["Complete goal: 'make_cookies' - Make cookies"]
