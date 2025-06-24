@@ -8,9 +8,9 @@ This tool is designed to be used with an MCP-compatible client or an LLM that ca
 
 The primary purpose of Conductor MCP is to provide a framework for:
 
-- **Goal Management**: Defining a graph of goals, where each goal can have prerequisites (other goals that must be completed first).
+- **Goal Management**: Defining a graph of goals, where each goal can have steps (other goals that must be completed first).
 - **Intelligent Execution**: Determining the next available goal based on the dependency graph and completed goals.
-- **Feasibility Analysis**: Checking if a goal is achievable by verifying that all its prerequisites (and their prerequisites, recursively) are defined within the system.
+- **Feasibility Analysis**: Checking if a goal is achievable by verifying that all its steps (and their steps, recursively) are defined within the system.
 
 ## Multi-Session Support
 
@@ -77,55 +77,67 @@ Once configured, your AI coding assistant will be able to use the Conductor MCP 
 ### Available Tools
 You can interact with the server using the following tools:
 
-- `set_goal(id: str, description: str, prerequisites: List[str] = [])`: Defines a new goal or updates an existing one. If any prerequisites do not exist, it will notify you that they are undefined.
-- `set_goals(goals: List[Dict])`: Defines or updates multiple goals at once, including their relationships. Accepts an arbitrary dependency graph. If there are cycles in the graph, it will return an error message listing the problematic goal IDs. If any prerequisites are undefined, it will return a warning listing them. Example usage:
+- `set_goals(goals: List[Dict])`: Defines or updates multiple goals at once, including their relationships. Accepts an arbitrary dependency graph. If there are cycles in the graph, it will return an error message listing the problematic goal IDs. If any steps are undefined, it will return a warning listing them. Each goal can have optional `steps` (list of ids) and `required_for` (list of ids) attributes. Example usage:
 
     ```python
     set_goals([
         {"id": "a", "description": "A"},
-        {"id": "b", "description": "B", "prerequisites": ["a"]},
-        {"id": "c", "description": "C", "prerequisites": ["b"]},
-        {"id": "d", "description": "D", "prerequisites": ["a", "c"]},
+        {"id": "b", "description": "B", "steps": ["a"]},
+        {"id": "c", "description": "C", "steps": ["b"]},
+        {"id": "d", "description": "D", "steps": ["a", "c"]},
     ])
     # Returns: "Goals defined."
     ```
+    
+    Using the `required_for` attribute:
+    ```python
+    set_goals([
+        {"id": "child1", "description": "Child 1", "required_for": ["parent"]},
+        {"id": "child2", "description": "Child 2", "required_for": ["parent"]}
+    ])
+    # This adds child1 and child2 as steps for the "parent" goal
+    ```
+    
     If you try to create a deadlock:
     ```python
     set_goals([
-        {"id": "x", "description": "X", "prerequisites": ["y"]},
-        {"id": "y", "description": "Y", "prerequisites": ["x"]},
+        {"id": "x", "description": "X", "steps": ["y"]},
+        {"id": "y", "description": "Y", "steps": ["x"]},
     ])
-    # Returns: "Deadlock detected in prerequisites. The following goals could not be created due to deadlocks: x, y."
+    # Returns: "Deadlock detected in steps. The following goals could not be created due to deadlocks: x, y."
     ```
-    If you include undefined prerequisites:
+    If you include undefined steps:
     ```python
     set_goals([
-        {"id": "z", "description": "Z", "prerequisites": ["not_defined"]},
+        {"id": "z", "description": "Z", "steps": ["not_defined"]},
     ])
-    # Returns: "Goals defined, but the following prerequisite goals are undefined: not_defined."
+    # Returns: "Goals defined, but the following step goals are undefined: not_defined."
     ```
-- `add_prerequisite_to_goal(goal_id: str, prerequisite_id: str)`: Adds a new prerequisite to an existing goal.
-- `plan_goal(goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True)`: Generates an ordered execution plan and, optionally, a Mermaid diagram of the dependency graph. It returns a dictionary with two keys: `plan` (a list of steps) and `diagram` (a string with the Mermaid diagram, or an empty string if `include_diagram` is `False`).
-- `mark_goal_complete(goal_id: str)`: Marks a goal as completed. If this goal was a prerequisite for other goals, it will suggest checking on the now-unblocked goals.
-- `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its prerequisites are met. It returns one of four statuses:
+- `add_steps(goal_steps: Dict[str, List[str]])`: Adds steps to multiple goals, with different steps for each goal. Takes a dictionary mapping goal IDs to lists of step IDs.
+- `plan_for_goal(goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True)`: Generates an ordered execution plan and, optionally, a Mermaid diagram of the dependency graph. It returns a dictionary with two keys: `plan` (a list of steps) and `diagram` (a string with the Mermaid diagram, or an empty string if `include_diagram` is `False`).
+- `mark_goals(goal_ids: List[str], completed: bool = True, complete_steps: bool = False)`: Marks multiple goals as completed or incomplete. If this goal was a step for other goals, it will suggest checking on the now-unblocked goals.
+- `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its steps are met. It returns one of four statuses:
     1. The goal is complete.
-    2. The goal is ready because all prerequisite goals have been met.
-    3. The goal is well-defined, but some prerequisites are not yet complete.
-    4. The goal has undefined prerequisites and requires more definition.
-- `reopen_goal(goal_id: str)`: Reopens a goal, marking it and any goals that depend on it as incomplete.
+    2. The goal is ready because all step goals have been met.
+    3. The goal is well-defined, but some steps are not yet complete.
+    4. The goal has undefined steps and requires more definition.
 
 ### Example Workflow
 
 Here is a simple example of how to use the tools to manage a plan:
 
 1.  **Define all your goals**:
-    - `set_goal(id="read_docs", description="Read the FastMCP documentation")`
-    - `set_goal(id="build_server", description="Build a simple MCP server", prerequisites=["read_docs"])`
-    - `set_goal(id="test_server", description="Test the server with a client", prerequisites=["build_server"])`
-    - `set_goal(id="learn_mcp", description="Learn the Model Context Protocol", prerequisites=["test_server"])`
-2.  **Check if your top-level goal is feasible**: `assess_goal(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete prerequisites, along with a completion summary.
+    ```python
+    set_goals([
+        {"id": "read_docs", "description": "Read the FastMCP documentation"},
+        {"id": "build_server", "description": "Build a simple MCP server", "steps": ["read_docs"]},
+        {"id": "test_server", "description": "Test the server with a client", "steps": ["build_server"]},
+        {"id": "learn_mcp", "description": "Learn the Model Context Protocol", "steps": ["test_server"]}
+    ])
+    ```
+2.  **Check if your top-level goal is feasible**: `assess_goal(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete steps, along with a completion summary.
 3.  **Execute the plan**:
-    - Begin by getting the steps for the top-level goal: `plan_goal(goal_id="learn_mcp")` -> Returns a dictionary containing the plan and a Mermaid diagram:
+    - Begin by getting the steps for the top-level goal: `plan_for_goal(goal_id="learn_mcp")` -> Returns a dictionary containing the plan and a Mermaid diagram:
       ```json
       {
         "plan": [
@@ -137,7 +149,7 @@ Here is a simple example of how to use the tools to manage a plan:
         "diagram": "graph TD\n    read_docs[\"read_docs: Read the FastMCP documentation\"]\n    build_server[\"build_server: Build a simple MCP server\"]\n    read_docs --> build_server\n    test_server[\"test_server: Test the server with a client\"]\n    build_server --> test_server\n    learn_mcp[\"learn_mcp: Learn the Model Context Protocol\"]\n    test_server --> learn_mcp\n"
       }
       ```
-    - You can omit the diagram by calling: `plan_goal(goal_id="learn_mcp", include_diagram=False)`
+    - You can omit the diagram by calling: `plan_for_goal(goal_id="learn_mcp", include_diagram=False)`
       ```json
       {
         "plan": [
@@ -149,10 +161,10 @@ Here is a simple example of how to use the tools to manage a plan:
         "diagram": ""
       }
       ```
-    - `mark_goal_complete(goal_id="read_docs")` -> Returns `"Goal 'read_docs' marked as completed.\nYou may want to call plan_goal for: build_server"`.
-    - `mark_goal_complete(goal_id="build_server")` -> Returns `"Goal 'build_server' marked as completed.\nYou may want to call plan_goal for: test_server"`.
-    - `mark_goal_complete(goal_id="test_server")` -> Returns `"Goal 'test_server' marked as completed.\nYou may want to call plan_goal for: learn_mcp"`.
-    - `mark_goal_complete(goal_id="learn_mcp")` -> Returns `"Goal 'learn_mcp' marked as completed."`.
+    - `mark_goals(goal_ids=["read_docs"])` -> Returns `"Goal 'read_docs' completed.\nYou may want to call plan_for_goal for: build_server"`.
+    - `mark_goals(goal_ids=["build_server"])` -> Returns `"Goal 'build_server' completed.\nYou may want to call plan_for_goal for: test_server"`.
+    - `mark_goals(goal_ids=["test_server"])` -> Returns `"Goal 'test_server' completed.\nYou may want to call plan_for_goal for: learn_mcp"`.
+    - `mark_goals(goal_ids=["learn_mcp"])` -> Returns `"Goal 'learn_mcp' completed."`.
 4.  **Confirm completion**: `assess_goal(goal_id="learn_mcp")` -> Returns a message that the goal is complete.
 
 ## Running Tests
