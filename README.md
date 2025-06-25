@@ -90,7 +90,7 @@ You can interact with the server using the following tools:
         {"id": "c", "description": "C", "steps": ["b"]},
         {"id": "d", "description": "D", "steps": ["a", "c"]},
     ])
-    # Returns: "Goals defined."
+    # Returns: "Goals defined. Next, you might want to focus on a: A. You can use plan_for_goal to see the full plan."
     ```
     
     Using the `required_for` attribute:
@@ -108,18 +108,18 @@ You can interact with the server using the following tools:
         {"id": "x", "description": "X", "steps": ["y"]},
         {"id": "y", "description": "Y", "steps": ["x"]},
     ])
-    # Returns: "Deadlock detected in steps. The following goals could not be created due to deadlocks: x, y."
+    # Returns: "Deadlock detected in steps. The following goals could not be created due to deadlocks: x, y. Review your goal dependencies to remove cycles, then try again."
     ```
     If you include undefined steps:
     ```python
     set_goals([
         {"id": "z", "description": "Z", "steps": ["not_defined"]},
     ])
-    # Returns: "Goals defined, but the following step goals are undefined: not_defined."
+    # Returns: "Goals defined, but the following step goals are undefined: not_defined. We don't know what's involved with not_defined. Maybe you could look into defining those as goals using set_goals."
     ```
 - `add_steps(goal_steps: Dict[str, List[str]])`: Adds steps to multiple goals, with different steps for each goal. Takes a dictionary mapping goal IDs to lists of step IDs.
 - `plan_for_goal(goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True)`: Generates an ordered execution plan and, optionally, a Mermaid diagram of the dependency graph. It returns a dictionary with two keys: `plan` (a list of steps) and `diagram` (a string with the Mermaid diagram, or an empty string if `include_diagram` is `False`).
-- `mark_goals(goal_ids: List[str], completed: bool = True, complete_steps: bool = False)`: Marks multiple goals as completed or incomplete. If this goal was a step for other goals, it will suggest checking on the now-unblocked goals.
+- `mark_goals(goal_ids: List[str], completed: bool = True, complete_steps: bool = False)`: Marks multiple goals as completed or incomplete. If this goal was a step for other goals, it will suggest focusing on all now-unblocked goals (listing all dependents if there are multiple).
 - `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its steps are met. It returns one of four statuses:
     1. The goal is complete.
     2. The goal is ready because all step goals have been met.
@@ -148,7 +148,8 @@ Here is a simple example of how to use the tools to manage a plan:
           "Complete goal: 'read_docs' - Read the FastMCP documentation",
           "Complete goal: 'build_server' - Build a simple MCP server",
           "Complete goal: 'test_server' - Test the server with a client",
-          "Complete goal: 'learn_mcp' - Learn the Model Context Protocol"
+          "Complete goal: 'learn_mcp' - Learn the Model Context Protocol",
+          "Start by working on the first incomplete goal in the plan."
         ],
         "diagram": "graph TD\n    read_docs[\"read_docs: Read the FastMCP documentation\"]\n    build_server[\"build_server: Build a simple MCP server\"]\n    read_docs --> build_server\n    test_server[\"test_server: Test the server with a client\"]\n    build_server --> test_server\n    learn_mcp[\"learn_mcp: Learn the Model Context Protocol\"]\n    test_server --> learn_mcp\n"
       }
@@ -160,16 +161,18 @@ Here is a simple example of how to use the tools to manage a plan:
           "Complete goal: 'read_docs' - Read the FastMCP documentation",
           "Complete goal: 'build_server' - Build a simple MCP server",
           "Complete goal: 'test_server' - Test the server with a client",
-          "Complete goal: 'learn_mcp' - Learn the Model Context Protocol"
+          "Complete goal: 'learn_mcp' - Learn the Model Context Protocol",
+          "Start by working on the first incomplete goal in the plan."
         ],
         "diagram": ""
       }
       ```
-    - `mark_goals(goal_ids=["read_docs"])` -> Returns `"Goal 'read_docs' completed.\nYou may want to call plan_for_goal for: build_server"`.
-    - `mark_goals(goal_ids=["build_server"])` -> Returns `"Goal 'build_server' completed.\nYou may want to call plan_for_goal for: test_server"`.
-    - `mark_goals(goal_ids=["test_server"])` -> Returns `"Goal 'test_server' completed.\nYou may want to call plan_for_goal for: learn_mcp"`.
-    - `mark_goals(goal_ids=["learn_mcp"])` -> Returns `"Goal 'learn_mcp' completed."`.
-4.  **Confirm completion**: `assess_goal(goal_id="learn_mcp")` -> Returns a message that the goal is complete.
+    - `mark_goals(goal_ids=["read_docs"])` -> Returns `"Goal 'read_docs' completed. Now that this goal is complete, you might want to focus on build_server. Use plan_for_goal to see what else is required."`.
+    - `mark_goals(goal_ids=["build_server"])` -> Returns `"Goal 'build_server' completed. Now that this goal is complete, you might want to focus on test_server. Use plan_for_goal to see what else is required."`.
+    - `mark_goals(goal_ids=["test_server"])` -> Returns `"Goal 'test_server' completed. Now that this goal is complete, you might want to focus on learn_mcp. Use plan_for_goal to see what else is required."`.
+    - `mark_goals(goal_ids=["learn_mcp"])` -> Returns `"Goal 'learn_mcp' completed. All goals are complete."`.
+    - If you complete a goal with multiple dependents, e.g. `mark_goals(goal_ids=["base"])` where both `dep1` and `dep2` depend on `base`, you'll get: `Goal 'base' completed. Now that this goal is complete, you might want to focus on dep1, dep2. Use plan_for_goal to see what else is required.`
+4.  **Confirm completion**: `assess_goal(goal_id="learn_mcp")` -> Returns a message that the goal is complete. (e.g., `"The goal is complete. Choose another goal to work on or review completed work."`)
 
 ## Running Tests
 
@@ -177,6 +180,4 @@ This project includes a test suite to verify its functionality. The tests use `p
 
 To run the tests, execute the following command from the root directory:
 
-```bash
-pytest
-``` 
+```

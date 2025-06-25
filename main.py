@@ -98,7 +98,8 @@ def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
 
     Returns:
         A confirmation message if all goals are defined, or an error message listing
-        problematic goals and reasons.
+        problematic goals and reasons. The response always includes an actionable
+        suggestion for what to do next.
     """
     state = get_session_state(ctx)
 
@@ -151,7 +152,8 @@ def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
             temp_goals.pop(node, None)
         return (
             f"Deadlock detected in steps. The following goals could not be "
-            f"created due to deadlocks: {', '.join(sorted(cycle_nodes))}."
+            f"created due to deadlocks: {', '.join(sorted(cycle_nodes))}.\n"
+            "Suggestion: Review your goal dependencies to remove cycles, then try again."
         )
 
     # Commit temp_goals to state.goals
@@ -164,12 +166,24 @@ def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
             if step not in state.goals:
                 undefined.add(step)
     if undefined:
+        missing = ", ".join(sorted(undefined))
         return (
-            f"Goals defined, but the following step goals are undefined: "
-            f"{', '.join(sorted(undefined))}."
+            f"Goals defined, but the following step goals are undefined: {missing}.\n"
+            f"We don't know what's involved with {missing}. Maybe you could look into "
+            "defining those as goals using set_goals."
         )
 
-    return "Goals defined."
+    # Suggest the first incomplete goal to focus on
+    incomplete_goals = [g for g in state.goals.values() if not g.completed]
+    if incomplete_goals:
+        g = incomplete_goals[0]
+        suggestion = (
+            f"Next, you might want to focus on {g.id}: {g.description}. You "
+            "can use plan_for_goal to see the full plan."
+        )
+    else:
+        suggestion = "All goals are complete. If you want to add more, use set_goals."
+    return f"Goals defined.\n{suggestion}"
 
 
 @mcp.tool()
@@ -185,12 +199,13 @@ def mark_goals(
     Args:
         goal_ids: List of goal IDs to mark.
         completed: Whether to mark the goals as completed (True) or incomplete (False).
-        complete_steps: (Optional) If True and completed=True, also marks any of these goals'
-            incomplete steps as completed. Defaults to False.
+        complete_steps: (Optional) If True and completed=True, also marks any of these
+            goals' incomplete steps as completed. Defaults to False.
 
     Returns:
-        A confirmation message. If completing goals unblocks other goals, suggests
-        the next goals to work on.
+        A confirmation message. If completing goals unblocks other goals, the response
+        includes an actionable suggestion for what to do next. If a goal has multiple
+        dependents, all are listed in the suggestion.
     """
     state = get_session_state(ctx)
 
@@ -233,7 +248,8 @@ def mark_goals(
             ]
             if (undefined_steps or incomplete_steps) and not complete_steps:
                 results.append(
-                    f"Goal '{goal_id}': You must complete all prerequisites before marking this goal as complete. "
+                    f"Goal '{goal_id}': You must complete all prerequisites before "
+                    "marking this goal as complete. "
                     "Run plan_for_goal to see the required steps. "
                     "To override, call mark_goals with complete_steps=True "
                     "(this will mark all prerequisites as completed)."
@@ -256,13 +272,26 @@ def mark_goals(
     result_message = "\n".join(results)
 
     if completed and all_dependents:
-        return (
-            result_message
-            + "\nYou may want to call plan_for_goal for: "
-            + ", ".join(sorted(all_dependents))
-        )
+        # Suggest all dependent goals to focus on
+        dependents_list = sorted(all_dependents)
+        if dependents_list:
+            dependents_str = ", ".join(dependents_list)
+            suggestion = (
+                "Now that this goal is complete, you might want to focus on "
+                f"{dependents_str}. Use plan_for_goal to see what else is required."
+            )
+        else:
+            suggestion = "All dependents are complete."
+        return result_message + f"\n{suggestion}"
     else:
-        return result_message
+        # Suggest the next incomplete goal
+        incomplete_goals = [g for g in state.goals.values() if not g.completed]
+        if incomplete_goals:
+            g = incomplete_goals[0]
+            suggestion = f"Next, you might want to focus on {g.id}: {g.description}."
+        else:
+            suggestion = "All goals are complete."
+        return result_message + f"\n{suggestion}"
 
 
 @mcp.tool()
@@ -271,11 +300,13 @@ def add_steps(ctx: Context, goal_steps: Dict[str, List[str]]) -> str:
     Adds steps to multiple goals, with different steps for each goal.
 
     Args:
-        goal_steps: A dictionary mapping goal IDs to lists of step IDs to add to each goal.
+        goal_steps: A dictionary mapping goal IDs to lists of step IDs to add to each
+            goal.
 
     Returns:
         A confirmation message, indicating if any dependent goals were marked as
-        incomplete.
+        incomplete. The response always includes an actionable suggestion for what to
+        do next.
     """
     state = get_session_state(ctx)
     results = []
@@ -300,7 +331,8 @@ def add_steps(ctx: Context, goal_steps: Dict[str, List[str]]) -> str:
             new_steps = goal.steps + [step_id]
             if _check_for_deadlocks(goal_id, new_steps, state.goals):
                 results.append(
-                    f"Adding step '{step_id}' to goal '{goal_id}' would create a deadlock."
+                    f"Adding step '{step_id}' to goal '{goal_id}' would create a "
+                    "deadlock."
                 )
                 continue
 
@@ -325,11 +357,28 @@ def add_steps(ctx: Context, goal_steps: Dict[str, List[str]]) -> str:
     result_message = "\n".join(results)
 
     if all_affected:
-        result_message += (
-            f"\nThe following goals were marked as incomplete due to dependency "
-            f"changes: {', '.join(sorted(all_affected))}."
-        )
-
+        next_goal = sorted(all_affected)[0] if all_affected else None
+        if next_goal:
+            suggestion = (
+                "Some goals were marked incomplete. You might want to focus on "
+                f"{next_goal} next. Use assess_goal or plan_for_goal to check the "
+                "updated workflow."
+            )
+        else:
+            suggestion = "All affected goals are complete."
+        result_message += f"\n{suggestion}"
+    else:
+        # Suggest the next incomplete goal
+        incomplete_goals = [g for g in state.goals.values() if not g.completed]
+        if incomplete_goals:
+            g = incomplete_goals[0]
+            suggestion = (
+                f"Next, you might want to focus on {g.id}: {g.description}. Use "
+                "assess_goal or plan_for_goal to check the updated workflow."
+            )
+        else:
+            suggestion = "All goals are complete."
+        result_message += f"\n{suggestion}"
     return result_message
 
 
@@ -389,16 +438,29 @@ def plan_for_goal(
 
     Returns:
         A dictionary containing:
-        - 'plan': An ordered list of goal descriptions that must be completed.
+        - 'plan': An ordered list of goal descriptions that must be completed. The last
+            element is always an actionable suggestion for what to do next.
         - 'diagram': A Mermaid diagram of the goal dependencies, or an empty string if
             include_diagram is False.
     """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
-        return {"plan": [f"Goal '{goal_id}' not found."], "diagram": ""}
+        return {
+            "plan": [
+                f"Goal '{goal_id}' not found. You may want to define this goal first "
+                "using set_goals."
+            ],
+            "diagram": "",
+        }
     goal = state.goals[goal_id]
     if goal.completed:
-        return {"plan": [f"Goal '{goal_id}' is already completed."], "diagram": ""}
+        return {
+            "plan": [
+                f"Goal '{goal_id}' is already completed. You can choose another goal "
+                "to work on or review completed work."
+            ],
+            "diagram": "",
+        }
 
     nodes = set()
     queue = [goal_id]
@@ -465,7 +527,45 @@ def plan_for_goal(
     if max_steps is not None:
         steps = steps[:max_steps]
 
-    return {"plan": steps, "diagram": diagram}
+    if steps:
+        first_action = steps[0]
+        if "Define missing step goal" in first_action:
+            suggestion = (
+                "We don't know what's involved with one or more steps. Maybe you could "
+                "look into defining those as goals using set_goals."
+            )
+        elif "Complete goal" in first_action:
+            next_goal = None
+            next_desc = None
+            for s in steps:
+                if s.startswith("Complete goal: "):
+                    next_goal = s.split("'")[1]
+                    # Try to get the description from the string
+                    parts = s.split("- ")
+                    if len(parts) > 1:
+                        next_desc = parts[1]
+                    break
+            if next_goal:
+                suggestion = (
+                    f"Next, you might want to focus on {next_goal}: {next_desc}. Once "
+                    "you've made progress, you can call mark_goals. Call add_steps or "
+                    "set_goals if you discover additional requirements."
+                )
+            else:
+                suggestion = "All goals are complete."
+        elif "Error" in first_action:
+            suggestion = (
+                "There is a deadlock in your goal dependencies. Please review your "
+                "goals and steps."
+            )
+        else:
+            suggestion = (
+                "All steps are complete. Consider reviewing or adding new goals."
+            )
+    else:
+        suggestion = "All steps are complete. Consider reviewing or adding new goals."
+
+    return {"plan": steps + ([suggestion] if suggestion else []), "diagram": diagram}
 
 
 @mcp.tool()
@@ -478,36 +578,55 @@ def assess_goal(ctx: Context, goal_id: str) -> str:
         goal_id: The ID of the goal to check.
 
     Returns:
-        A human-readable string summarizing the goal's status (e.g., 'Completed',
-        'Blocked by prerequisites', 'Ready to be worked on').
+        A human-readable string summarizing the goal's status and always including an
+        actionable suggestion for what to do next.
     """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
-        return f"Goal '{goal_id}' not found."
+        return (
+            f"Goal '{goal_id}' not found. You may want to define this goal first using "
+            "set_goals."
+        )
     goal = state.goals[goal_id]
     if goal.completed:
-        return "The goal is complete."
+        return (
+            "The goal is complete. You can choose another goal to work on or review "
+            "completed work."
+        )
     all_steps = _get_all_steps(goal_id, state.goals)
     undefined_steps = sorted([p for p in all_steps if p not in state.goals])
     if undefined_steps:
+        missing = ", ".join(undefined_steps)
         return (
-            f"The goal has undefined step goals: "
-            f"{', '.join(undefined_steps)}. More work is required to properly "
-            "define the goal."
+            f"The goal has undefined step goals: {missing}. More work is required to "
+            f"properly define the goal.\nWe don't know what's involved with {missing}. "
+            "Maybe you could look into defining those as goals using set_goals."
         )
     all_goals_in_workflow = all_steps.union({goal_id})
     incomplete_steps = sorted(
         [g for g in all_steps if g in state.goals and not state.goals[g].completed]
     )
     if not incomplete_steps:
-        return f"All step goals are met. The goal is ready: {goal.description}"
+        return (
+            f"All step goals are met. The goal is ready: {goal.description}\nWhen the "
+            "goal is complete, you can mark it as complete using mark_goals."
+        )
     completed_count = len(all_goals_in_workflow) - len(incomplete_steps) - 1
     total_count = len(all_goals_in_workflow)
     percentage = (completed_count / total_count) * 100
+    if incomplete_steps:
+        suggestion = (
+            f"You might want to focus on completing the step goal: "
+            f"{incomplete_steps[0]}. Use plan_for_goal to see the required steps, or "
+            "mark completed steps as done."
+        )
+    else:
+        suggestion = "All step goals are complete."
     return (
         f"The goal is well-defined, but some step goals are incomplete. "
         f"Completion: {completed_count}/{total_count} ({percentage:.0f}%) goals "
-        f"completed. Incomplete step goals: {', '.join(incomplete_steps)}."
+        f"completed. Incomplete step goals: {', '.join(incomplete_steps)}.\n"
+        f"{suggestion}"
     )
 
 

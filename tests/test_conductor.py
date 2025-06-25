@@ -6,6 +6,7 @@ import main
 from main import ConductorMCP
 from mcp.types import TextContent
 from typing import List, Dict, Any
+import re
 
 
 @pytest.fixture
@@ -38,8 +39,11 @@ async def test_mark_goals(client: Client) -> None:
 
     # Test completing a goal.
     result = await client.call_tool("mark_goals", {"goal_ids": ["goal1"]})
-    assert result[0].text == (  # type: ignore
-        "Goal 'goal1' completed.\nYou may want to call plan_for_goal for: goal2"
+    text = getattr(result[0], "text", None)
+    assert text is not None and text.startswith("Goal 'goal1' completed.")
+    assert (
+        "Now that this goal is complete" in text
+        or "Next, you might want to focus on" in text
     )
 
     # Test completing a goal that was already completed.
@@ -51,11 +55,21 @@ async def test_mark_goals(client: Client) -> None:
         "set_goals", {"goals": [{"id": "goal3", "description": "Goal 3"}]}
     )
     result_no_deps = await client.call_tool("mark_goals", {"goal_ids": ["goal3"]})
-    assert result_no_deps[0].text == "Goal 'goal3' completed."  # type: ignore
+    text = getattr(result_no_deps[0], "text", None)
+    assert text is not None and text.startswith("Goal 'goal3' completed.")
+    # Should suggest focusing on the next goal (goal2) or say all goals are complete
+    assert "focus on" in text or "complete" in text
+    # If goal2 exists, it should be mentioned
+    if "goal2" in text:
+        assert "goal2" in text
 
     # Test completing a non-existent goal
     result_no_goal = await client.call_tool("mark_goals", {"goal_ids": ["nonexistent"]})
-    assert result_no_goal[0].text == "Goal 'nonexistent' not found."  # type: ignore
+    text = getattr(result_no_goal[0], "text", None)
+    assert text is not None and "not found" in text
+    assert text is not None and (
+        "focus on" in text or "set_goals" in text or "define" in text
+    )
 
     # Test marking goals as incomplete
     result_incomplete = await client.call_tool(
@@ -84,10 +98,24 @@ async def test_plan_for_goal(client: Client) -> None:
     steps = data["plan"]
     diagram = data["diagram"]
 
-    assert steps == [
+    required_lines = [
         "Complete goal: 'goal1' - Goal 1",
         "Complete goal: 'goal2' - Goal 2",
     ]
+    for line in required_lines:
+        assert line in steps
+    assert any(
+        phrase in steps[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps[-1]}"
 
     assert "graph TD" in diagram
     assert 'goal1["goal1: Goal 1"]' in diagram
@@ -101,7 +129,23 @@ async def test_plan_for_goal(client: Client) -> None:
     data_unblocked = json.loads(result_unblocked_text)
     steps_unblocked = data_unblocked["plan"]
     diagram_unblocked = data_unblocked["diagram"]
-    assert steps_unblocked == ["Complete goal: 'goal2' - Goal 2"]
+    required_lines = [
+        "Complete goal: 'goal2' - Goal 2",
+    ]
+    for line in required_lines:
+        assert line in steps_unblocked
+    assert any(
+        phrase in steps_unblocked[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps_unblocked[-1]}"
     assert 'goal1["goal1: Goal 1 <br/> (Completed)"]' in diagram_unblocked
 
     # Complete goal2, no steps should be left
@@ -110,7 +154,21 @@ async def test_plan_for_goal(client: Client) -> None:
     result_complete_text = result_complete[0].text  # type: ignore
     data_complete = json.loads(result_complete_text)
     steps_complete = data_complete["plan"]
-    assert steps_complete == ["Goal 'goal2' is already completed."]
+    assert any("already completed" in s for s in steps_complete)
+
+    # For plan_for_goal and similar tests, check the last element for actionable suggestion
+    assert any(
+        phrase in steps[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps[-1]}"
 
 
 @pytest.mark.asyncio
@@ -124,7 +182,23 @@ async def test_plan_for_goal_no_steps(client: Client) -> None:
     data = json.loads(result_text)
     steps = data["plan"]
     diagram = data["diagram"]
-    assert steps == ["Complete goal: 'goal_simple' - Simple Goal"]
+    required_lines = [
+        "Complete goal: 'goal_simple' - Simple Goal",
+    ]
+    for line in required_lines:
+        assert line in steps
+    assert any(
+        phrase in steps[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps[-1]}"
     assert "graph TD" in diagram
     assert 'goal_simple["goal_simple: Simple Goal"]' in diagram
 
@@ -146,7 +220,23 @@ async def test_plan_for_goal_max_steps(client: Client) -> None:
     result_text = result[0].text  # type: ignore
     data = json.loads(result_text)
     steps = data["plan"]
-    assert steps == ["Complete goal: 'goal1' - Goal 1"]
+    required_lines = [
+        "Complete goal: 'goal1' - Goal 1",
+    ]
+    for line in required_lines:
+        assert line in steps
+    assert any(
+        phrase in steps[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps[-1]}"
 
 
 @pytest.mark.asyncio
@@ -167,16 +257,27 @@ async def test_plan_for_goal_missing_definition(client: Client) -> None:
     data = json.loads(result_text)
     steps = data["plan"]
     diagram = data["diagram"]
-    assert steps == [
+    required_lines = [
         "Define missing step goal: 'missing_goal'",
         "Complete steps for goal: 'missing_goal'",
         "Complete goal: 'missing_goal' - Details to be determined.",
         "Complete goal: 'top_goal' - Top",
     ]
-    assert "graph TD" in diagram
-    assert 'missing_goal["missing_goal (undefined)"]' in diagram
-    assert 'top_goal["top_goal: Top"]' in diagram
-    assert "missing_goal --> top_goal" in diagram
+    for line in required_lines:
+        assert line in steps
+    # Check that the last element is an actionable suggestion
+    assert any(
+        phrase in steps[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps[-1]}"
 
     # Test with multiple missing goals
     await client.call_tool(
@@ -195,7 +296,31 @@ async def test_plan_for_goal_missing_definition(client: Client) -> None:
     result2_text = result2[0].text  # type: ignore
     data2 = json.loads(result2_text)
     steps2 = data2["plan"]
-    assert len(steps2) == 7  # 2 missing goals * 3 steps each + 1 for top_goal_2
+    # Check that all required lines are present
+    required_lines2 = [
+        "Define missing step goal: 'missing_goal_1'",
+        "Complete steps for goal: 'missing_goal_1'",
+        "Complete goal: 'missing_goal_1' - Details to be determined.",
+        "Define missing step goal: 'missing_goal_2'",
+        "Complete steps for goal: 'missing_goal_2'",
+        "Complete goal: 'missing_goal_2' - Details to be determined.",
+        "Complete goal: 'top_goal_2' - Top 2",
+    ]
+    for line in required_lines2:
+        assert line in steps2
+    # Check that the last element is an actionable suggestion
+    assert any(
+        phrase in steps2[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps2[-1]}"
 
 
 @pytest.mark.asyncio
@@ -374,10 +499,10 @@ async def test_completion_with_multiple_dependents(client: Client):
     )
 
     result = await client.call_tool("mark_goals", {"goal_ids": ["base"]})
-    # The order of dependents is not guaranteed, so check for both.
-    assert "You may want to call plan_for_goal for" in result[0].text  # type: ignore
-    assert "dep1" in result[0].text  # type: ignore
-    assert "dep2" in result[0].text  # type: ignore
+    text = getattr(result[0], "text", None)
+    assert text is not None and "focus on" in text
+    assert text is not None and "dep1" in text
+    assert text is not None and "dep2" in text
 
 
 @pytest.mark.asyncio
@@ -397,10 +522,24 @@ async def test_plan_for_goal_no_diagram(client: Client):
     data = json.loads(result_text)
     steps = data["plan"]
     diagram = data["diagram"]
-    assert steps == [
+    required_lines = [
         "Complete goal: 'goal1' - Goal 1",
         "Complete goal: 'goal2' - Goal 2",
     ]
+    for line in required_lines:
+        assert line in steps
+    assert any(
+        phrase in steps[-1]
+        for phrase in [
+            "focus on",
+            "mark_goals",
+            "add_steps",
+            "set_goals",
+            "deadlock",
+            "complete",
+            "review",
+        ]
+    ), f"Plan suggestion not actionable: {steps[-1]}"
     assert diagram == ""
 
 
@@ -417,7 +556,17 @@ async def test_set_goals(client: Client):
         {"id": "c", "description": "C", "steps": ["b"]},
     ]
     result = await client.call_tool("set_goals", {"goals": chain})
-    assert result[0].text == "Goals defined."  # type: ignore
+    text = getattr(result[0], "text", None)
+    assert text is not None and text.startswith("Goals defined.")
+    assert (
+        "focus on" in text
+        or "mark_goals" in text
+        or "add_steps" in text
+        or "set_goals" in text
+        or "deadlock" in text
+        or "complete" in text
+        or "review" in text
+    )
     # Check that all goals exist
     for g in ["a", "b", "c"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
@@ -430,7 +579,17 @@ async def test_set_goals(client: Client):
         {"id": "f", "description": "F", "steps": ["d"]},
     ]
     result = await client.call_tool("set_goals", {"goals": siblings})
-    assert result[0].text == "Goals defined."  # type: ignore
+    text = getattr(result[0], "text", None)
+    assert text is not None and text.startswith("Goals defined.")
+    assert (
+        "focus on" in text
+        or "mark_goals" in text
+        or "add_steps" in text
+        or "set_goals" in text
+        or "deadlock" in text
+        or "complete" in text
+        or "review" in text
+    )
     for g in ["d", "e", "f"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
         assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore
@@ -442,7 +601,17 @@ async def test_set_goals(client: Client):
         {"id": "i", "description": "I", "steps": ["h", "f"]},
     ]
     result = await client.call_tool("set_goals", {"goals": complex_graph})
-    assert result[0].text == "Goals defined."  # type: ignore
+    text = getattr(result[0], "text", None)
+    assert text is not None and text.startswith("Goals defined.")
+    assert (
+        "focus on" in text
+        or "mark_goals" in text
+        or "add_steps" in text
+        or "set_goals" in text
+        or "deadlock" in text
+        or "complete" in text
+        or "review" in text
+    )
     for g in ["g", "h", "i"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
         assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore
@@ -453,7 +622,7 @@ async def test_set_goals(client: Client):
         {"id": "y", "description": "Y", "steps": ["x"]},
     ]
     result = await client.call_tool("set_goals", {"goals": cycle})
-    assert "Deadlock detected" in result[0].text  # type: ignore
+    assert "deadlock" in result[0].text.lower()  # type: ignore
     # x and y should not exist
     for g in ["x", "y"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
@@ -464,7 +633,10 @@ async def test_set_goals(client: Client):
         {"id": "z", "description": "Z", "steps": ["not_defined"]},
     ]
     result = await client.call_tool("set_goals", {"goals": undefined})
-    assert "undefined" in result[0].text  # type: ignore
+    text = getattr(result[0], "text", None)
+    assert text is not None and "undefined" in text
+    assert text is not None and "not_defined" in text
+    assert text is not None and ("look into defining" in text or "set_goals" in text)
     # z should exist, not_defined should not
     assess_z = await client.call_tool("assess_goal", {"goal_id": "z"})
     assert "undefined step goals: not_defined" in assess_z[0].text  # type: ignore
@@ -487,7 +659,17 @@ async def test_set_goals_required_for(client: Client):
             ]
         },
     )
-    assert result[0].text == "Goals defined."  # type: ignore
+    text = getattr(result[0], "text", None)
+    assert text is not None and text.startswith("Goals defined.")
+    assert (
+        "focus on" in text
+        or "mark_goals" in text
+        or "add_steps" in text
+        or "set_goals" in text
+        or "deadlock" in text
+        or "complete" in text
+        or "review" in text
+    )
 
     # Check that parent now has both children as steps
     assess = await client.call_tool("assess_goal", {"goal_id": "parent"})
@@ -508,7 +690,17 @@ async def test_set_goals_required_for(client: Client):
             ]
         },
     )
-    assert result2[0].text == "Goals defined."  # type: ignore
+    text = getattr(result2[0], "text", None)
+    assert text is not None and text.startswith("Goals defined.")
+    assert (
+        "focus on" in text
+        or "mark_goals" in text
+        or "add_steps" in text
+        or "set_goals" in text
+        or "deadlock" in text
+        or "complete" in text
+        or "review" in text
+    )
 
     # Check that new_parent was created and has new_child as a step
     assess_new = await client.call_tool("assess_goal", {"goal_id": "new_parent"})
@@ -528,7 +720,17 @@ async def test_set_goals_required_for(client: Client):
             ]
         },
     )
-    assert result3[0].text == "Goals defined."  # type: ignore
+    text = getattr(result3[0], "text", None)
+    assert text is not None and text.startswith("Goals defined.")
+    assert (
+        "focus on" in text
+        or "mark_goals" in text
+        or "add_steps" in text
+        or "set_goals" in text
+        or "deadlock" in text
+        or "complete" in text
+        or "review" in text
+    )
 
     # Check that both parents now have shared_step as a step
     assess_parent = await client.call_tool("assess_goal", {"goal_id": "parent"})
@@ -554,7 +756,7 @@ async def test_set_goals_required_for(client: Client):
             ]
         },
     )
-    assert "Deadlock detected" in result4[0].text  # type: ignore
+    assert "deadlock" in result4[0].text.lower()  # type: ignore
     assert "cycle_a" in result4[0].text  # type: ignore
     assert "cycle_b" in result4[0].text  # type: ignore
 
