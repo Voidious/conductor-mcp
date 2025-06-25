@@ -76,7 +76,7 @@ Once configured, your AI coding assistant will be able to use the Conductor MCP 
 
 ### Usage Rules for AI-Assisted Coding Editors
 
-For best results with Conductor MCP, load the file `conductor-rules.md` into your AI-assisted coding editor (such as Cursor or Windsurf) as rules. This enables your coding assistant to follow best practices and use Conductor MCP efficiently and effectively. You may also read the file if you wish, but its main purpose is to serve as a ruleset for your coding assistant.
+For best results with Conductor MCP, load the file [conductor-rules.md](./conductor-rules.md) into your AI-assisted coding editor (such as Cursor or Windsurf) as rules. This enables your coding assistant to follow best practices and use Conductor MCP efficiently and effectively. You may also read the file if you wish, but its main purpose is to serve as a ruleset for your coding assistant.
 
 ## Available Tools
 You can interact with the server using the following tools:
