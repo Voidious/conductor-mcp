@@ -7,6 +7,11 @@ from main import ConductorMCP
 from mcp.types import TextContent
 from typing import List, Dict, Any
 import re
+import sys
+import subprocess
+import time
+import socket
+import random
 
 
 @pytest.fixture
@@ -765,3 +770,48 @@ async def test_set_goals_required_for(client: Client):
     assess_b = await client.call_tool("assess_goal", {"goal_id": "cycle_b"})
     assert "not found" in assess_a[0].text  # type: ignore
     assert "not found" in assess_b[0].text  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_http_server_basic():
+    """
+    Start the server in HTTP mode as a subprocess, connect via HTTP, and verify set_goals tool.
+    """
+    port = random.randint(9000, 9999)
+    host = "127.0.0.1"
+    url = f"http://{host}:{port}/mcp/"
+
+    proc = subprocess.Popen(
+        [sys.executable, "main.py", "--http", "--host", host, "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        for _ in range(30):
+            try:
+                with socket.create_connection((host, port), timeout=0.2):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            out, err = proc.communicate(timeout=2)
+            print("SERVER STDOUT:", out.decode())
+            print("SERVER STDERR:", err.decode())
+            raise RuntimeError("HTTP server did not start in time")
+
+        # Use FastMCP Client to connect over HTTP
+        async with Client(url) as client:
+            # Call a tool (set_goals)
+            result = await client.call_tool(
+                "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+            )
+            text = getattr(result[0], "text", None)
+            assert text is not None and (
+                "Goals defined." in text or "focus on" in text or "complete" in text
+            )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()

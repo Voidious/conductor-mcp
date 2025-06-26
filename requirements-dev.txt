@@ -2,3 +2,4 @@ black
 fastmcp 
 pre-commit
 pytest
+pytest-asyncio

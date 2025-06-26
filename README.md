@@ -74,6 +74,42 @@ Make sure to replace the path with the actual location of the script in your clo
 
 Once configured, your AI coding assistant will be able to use the Conductor MCP tools.
 
+### Starting the Server with Streamable HTTP
+
+By default, the server runs using stdio transport (suitable for local tools and editor integration). To run the server as a Streamable HTTP service (recommended for web-based deployments or remote access), use the `--http` flag:
+
+```bash
+python main.py --http
+```
+
+You can also specify a custom host and port:
+
+```bash
+python main.py --http --host 0.0.0.0 --port 9000
+```
+
+- `--http`: Start the server with Streamable HTTP (instead of stdio)
+- `--host`: Host for HTTP server (default: 127.0.0.1)
+- `--port`: Port for HTTP server (default: 8000)
+
+**Note:** The `run.sh` and `run.bat` scripts also support these arguments and will pass them to `main.py`. For example:
+
+```bash
+./run.sh --http --host 0.0.0.0 --port 9000
+```
+
+or on Windows:
+
+```bat
+run.bat --http --host 0.0.0.0 --port 9000
+```
+
+If you omit `--http`, the server will use stdio transport (default behavior):
+
+```bash
+python main.py
+```
+
 ### Usage Rules for AI-Assisted Coding Editors
 
 For best results with Conductor MCP, load the file [conductor-rules.md](./conductor-rules.md) into your AI-assisted coding editor (such as Cursor or Windsurf) as rules. This enables your coding assistant to follow best practices and use Conductor MCP efficiently and effectively. You may also read the file if you wish, but its main purpose is to serve as a ruleset for your coding assistant.
@@ -179,5 +215,3 @@ Here is a simple example of how to use the tools to manage a plan:
 This project includes a test suite to verify its functionality. The tests use `pytest` and run in-memory without needing to keep the server running in a separate process.
 
 To run the tests, execute the following command from the root directory:
-
-```

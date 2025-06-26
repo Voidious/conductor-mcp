@@ -3,6 +3,7 @@ import graphlib
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Set, Union, Any, Callable
+import argparse
 
 # --- Data Structures ---
 
@@ -712,4 +713,27 @@ def _find_cycle_nodes(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    parser = argparse.ArgumentParser(description="Start the Lever MCP server.")
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Start the server with Streamable HTTP (instead of stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host for HTTP server (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for HTTP server (default: 8000)",
+    )
+    args = parser.parse_args()
+
+    if args.http:
+        mcp.run(transport="http", host=args.host, port=args.port)
+    else:
+        mcp.run()

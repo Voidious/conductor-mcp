@@ -18,4 +18,4 @@ else
 fi
 
 # Run the main Python script
-python main.py 
+python main.py "$@"
