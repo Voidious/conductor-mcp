@@ -1,7 +1,6 @@
-import sys
 import graphlib
 from fastmcp import FastMCP, Context
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import List, Dict, Optional, Set, Union, Any, Callable
 import argparse
 
@@ -154,7 +153,8 @@ def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
         return (
             f"Deadlock detected in steps. The following goals could not be "
             f"created due to deadlocks: {', '.join(sorted(cycle_nodes))}.\n"
-            "Suggestion: Review your goal dependencies to remove cycles, then try again."
+            "Suggestion: Review your goal dependencies to remove cycles, then try "
+            "again."
         )
 
     # Commit temp_goals to state.goals

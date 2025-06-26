@@ -4,9 +4,6 @@ import importlib
 import json
 import main
 from main import ConductorMCP
-from mcp.types import TextContent
-from typing import List, Dict, Any
-import re
 import sys
 import subprocess
 import time
@@ -53,8 +50,7 @@ async def test_mark_goals(client: Client) -> None:
 
     # Test completing a goal that was already completed.
     result_already_done = await client.call_tool("mark_goals", {"goal_ids": ["goal1"]})
-    assert "Goal 'goal1' was already completed" in result_already_done[0].text  # type: ignore
-
+    assert "Goal 'goal1' was already completed" in result_already_done[0].text  # type: ignore  # noqa
     # Test completing a goal with no dependents.
     await client.call_tool(
         "set_goals", {"goals": [{"id": "goal3", "description": "Goal 3"}]}
@@ -80,7 +76,7 @@ async def test_mark_goals(client: Client) -> None:
     result_incomplete = await client.call_tool(
         "mark_goals", {"goal_ids": ["goal1"], "completed": False}
     )
-    assert "Goal 'goal1' marked as incomplete" in result_incomplete[0].text  # type: ignore
+    assert "Goal 'goal1' marked as incomplete" in result_incomplete[0].text  # type: ignore  # noqa
 
 
 @pytest.mark.asyncio
@@ -161,7 +157,8 @@ async def test_plan_for_goal(client: Client) -> None:
     steps_complete = data_complete["plan"]
     assert any("already completed" in s for s in steps_complete)
 
-    # For plan_for_goal and similar tests, check the last element for actionable suggestion
+    # For plan_for_goal and similar tests, check the last element for actionable
+    # suggestion
     assert any(
         phrase in steps[-1]
         for phrase in [
@@ -261,7 +258,6 @@ async def test_plan_for_goal_missing_definition(client: Client) -> None:
     result_text = result[0].text  # type: ignore
     data = json.loads(result_text)
     steps = data["plan"]
-    diagram = data["diagram"]
     required_lines = [
         "Define missing step goal: 'missing_goal'",
         "Complete steps for goal: 'missing_goal'",
@@ -386,7 +382,7 @@ async def test_add_steps(client: Client) -> None:
     result_duplicate = await client.call_tool(
         "add_steps", {"goal_steps": {"goal2": ["goal1"]}}
     )
-    assert "Step 'goal1' already exists for goal 'goal2'" in result_duplicate[0].text  # type: ignore
+    assert "Step 'goal1' already exists for goal 'goal2'" in result_duplicate[0].text  # type: ignore  # noqa
 
     # Test adding a step to a non-existent goal
     result_no_goal = await client.call_tool(
@@ -575,7 +571,7 @@ async def test_set_goals(client: Client):
     # Check that all goals exist
     for g in ["a", "b", "c"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
-        assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore
+        assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore  # noqa
 
     # 2. Add siblings with shared step
     siblings = [
@@ -597,7 +593,7 @@ async def test_set_goals(client: Client):
     )
     for g in ["d", "e", "f"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
-        assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore
+        assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore  # noqa
 
     # 3. Add a complex graph
     complex_graph = [
@@ -619,7 +615,7 @@ async def test_set_goals(client: Client):
     )
     for g in ["g", "h", "i"]:
         assess = await client.call_tool("assess_goal", {"goal_id": g})
-        assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore
+        assert "well-defined" in assess[0].text or "ready" in assess[0].text  # type: ignore  # noqa
 
     # 4. Cycle detection (should not add any goals)
     cycle = [
@@ -775,7 +771,8 @@ async def test_set_goals_required_for(client: Client):
 @pytest.mark.asyncio
 async def test_http_server_basic():
     """
-    Start the server in HTTP mode as a subprocess, connect via HTTP, and verify set_goals tool.
+    Start the server in HTTP mode as a subprocess, connect via HTTP, and verify
+    set_goals tool.
     """
     port = random.randint(9000, 9999)
     host = "127.0.0.1"
