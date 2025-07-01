@@ -127,15 +127,15 @@ You can interact with the server using the following tools:
   **Tree Format** - Define complex hierarchies with ASCII tree structure:
   ```python
   {"id": "launch", "description": "Launch product", "steps": """Goal: Launch New Product
-├── Step: Finalize Product Design
-│   ├── Step: User Research Completed
-│   └── Step: Design Mockups Approved
-├── Step: Develop Marketing Strategy
-│   ├── Step: Market Analysis Done
-│   └── Step: Marketing Team Assembled
-└── Step: Secure Funding
-    ├── Step: Business Plan Approved
-    └── Step: Investor Pitches Conducted"""}
+  ├── Step: Finalize Product Design
+  │   ├── Step: User Research Completed
+  │   └── Step: Design Mockups Approved
+  ├── Step: Develop Marketing Strategy
+  │   ├── Step: Market Analysis Done
+  │   └── Step: Marketing Team Assembled
+  └── Step: Secure Funding
+      ├── Step: Business Plan Approved
+      └── Step: Investor Pitches Conducted"""}
   ```
   
   The tree format uses step names directly as goal IDs (preserving original formatting):
@@ -208,15 +208,15 @@ Here is a simple example of how to use the tools to manage a plan:
     ```python
     set_goals([
         {"id": "learn_mcp", "description": "Learn the Model Context Protocol", "steps": """Goal: Learn MCP
-├── Step: Read Documentation
-│   ├── Step: Read FastMCP Docs
-│   └── Step: Read MCP Specification
-├── Step: Build Server
-│   ├── Step: Set Up Environment
-│   └── Step: Implement Basic Tools
-└── Step: Test Implementation
-    ├── Step: Unit Tests
-    └── Step: Integration Tests"""}
+        ├── Step: Read Documentation
+        │   ├── Step: Read FastMCP Docs
+        │   └── Step: Read MCP Specification
+        ├── Step: Build Server
+        │   ├── Step: Set Up Environment
+        │   └── Step: Implement Basic Tools
+        └── Step: Test Implementation
+            ├── Step: Unit Tests
+            └── Step: Integration Tests"""}
     ])
     ```
 2.  **Check if your top-level goal is feasible**: `assess_goal(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete steps, along with a completion summary.
