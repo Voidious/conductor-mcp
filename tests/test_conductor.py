@@ -258,14 +258,15 @@ async def test_plan_for_goal_missing_definition(client: Client) -> None:
     result_text = result[0].text  # type: ignore
     data = json.loads(result_text)
     steps = data["plan"]
+    # Check that the auto-created goal shows up as needing definition
     required_lines = [
-        "Define missing step goal: 'missing_goal'",
-        "Complete steps for goal: 'missing_goal'",
-        "Complete goal: 'missing_goal' - Details to be determined.",
+        "Define and complete goal: 'missing_goal' - Details to be determined.",
         "Complete goal: 'top_goal' - Top",
     ]
     for line in required_lines:
         assert line in steps
+    # Should suggest defining the goals
+    assert any("We don't know what's involved" in step for step in steps)
     # Check that the last element is an actionable suggestion
     assert any(
         phrase in steps[-1]
@@ -299,12 +300,8 @@ async def test_plan_for_goal_missing_definition(client: Client) -> None:
     steps2 = data2["plan"]
     # Check that all required lines are present
     required_lines2 = [
-        "Define missing step goal: 'missing_goal_1'",
-        "Complete steps for goal: 'missing_goal_1'",
-        "Complete goal: 'missing_goal_1' - Details to be determined.",
-        "Define missing step goal: 'missing_goal_2'",
-        "Complete steps for goal: 'missing_goal_2'",
-        "Complete goal: 'missing_goal_2' - Details to be determined.",
+        "Define and complete goal: 'missing_goal_1' - Details to be determined.",
+        "Define and complete goal: 'missing_goal_2' - Details to be determined.",
         "Complete goal: 'top_goal_2' - Top 2",
     ]
     for line in required_lines2:
@@ -629,18 +626,19 @@ async def test_set_goals(client: Client):
         assess = await client.call_tool("assess_goal", {"goal_id": g})
         assert "not found" in assess[0].text  # type: ignore
 
-    # 5. Undefined steps
+    # 5. Steps that need definition (auto-created goals with empty descriptions)
     undefined = [
         {"id": "z", "description": "Z", "steps": ["not_defined"]},
     ]
     result = await client.call_tool("set_goals", {"goals": undefined})
     text = getattr(result[0], "text", None)
-    assert text is not None and "undefined" in text
-    assert text is not None and "not_defined" in text
-    assert text is not None and ("look into defining" in text or "set_goals" in text)
-    # z should exist, not_defined should not
+    assert text is not None and text.startswith("Goals defined.")
+    # Check that the step was auto-created as a goal
+    assess = await client.call_tool("assess_goal", {"goal_id": "not_defined"})
+    assert "ready" in assess[0].text  # Auto-created goal with empty description
+    # Check that parent goal recognizes it needs definition
     assess_z = await client.call_tool("assess_goal", {"goal_id": "z"})
-    assert "undefined step goals: not_defined" in assess_z[0].text  # type: ignore
+    assert "need more definition" in assess_z[0].text
 
 
 @pytest.mark.asyncio

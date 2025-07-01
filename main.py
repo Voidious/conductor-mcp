@@ -1,8 +1,77 @@
 import graphlib
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel
-from typing import List, Dict, Optional, Set, Union, Any, Callable
+from typing import List, Dict, Optional, Set, Union, Any, Callable, Tuple
 import argparse
+
+# --- MCP Parameter Description Monkey Patch ---
+PARAM_DESCRIPTIONS = {
+    "set_goals": {
+        "goals": (
+            "(List[Dict]) A list of goal dictionaries. Each goal dict should have 'id' "
+            "(str) and 'description' (str), with optional 'steps' and 'required_for' "
+            "(List[str]) attributes. The 'steps' can be either: (1) List[str] of step "
+            "IDs, or (2) a tree-format string like 'Goal: Main\\n"
+            "├── Step: Sub1\\n│   ├── Step: SubSub1\\n│   └── Step: SubSub2\\n"
+            "└── Step: Sub2' which automatically creates goal hierarchy."
+        ),
+    },
+    "mark_goals": {
+        "goal_ids": "(List[str]) List of goal IDs to mark as completed or incomplete",
+        "completed": (
+            "(bool, default=True) Whether to mark goals as completed (True) or "
+            "incomplete (False)"
+        ),
+        "complete_steps": (
+            "(bool, default=False) If True and completed=True, also marks all "
+            "prerequisite steps as completed"
+        ),
+    },
+    "add_steps": {
+        "goal_steps": (
+            "(Dict[str, List[str]]) Dictionary mapping goal IDs to lists of step IDs "
+            "to add to each goal"
+        ),
+    },
+    "plan_for_goal": {
+        "goal_id": "(str) The ID of the goal to generate an execution plan for",
+        "max_steps": (
+            "(int, optional) Maximum number of steps to include in the returned plan"
+        ),
+        "include_diagram": (
+            "(bool, default=True) Whether to include a Mermaid diagram in the response"
+        ),
+    },
+    "assess_goal": {
+        "goal_id": "(str) The ID of the goal to assess and check status for",
+    },
+}
+
+try:
+    from fastmcp.tools.tool import ParsedFunction
+
+    # Only store the original if not already stored
+    if "_original_from_function" not in globals():
+        _original_from_function = ParsedFunction.from_function
+
+    def patched_from_function(fn, exclude_args=None, validate=True):
+        parsed = _original_from_function(
+            fn, exclude_args=exclude_args, validate=validate
+        )
+        tool_name = getattr(fn, "__name__", None)
+        if tool_name in PARAM_DESCRIPTIONS:
+            param_descs = PARAM_DESCRIPTIONS[tool_name]
+            props = parsed.parameters.get("properties")
+            if props:
+                for param, desc in param_descs.items():
+                    if param in props:
+                        props[param]["description"] = desc
+        return parsed
+
+    ParsedFunction.from_function = staticmethod(patched_from_function)
+except ImportError:
+    pass
+# --- End MCP Parameter Description Monkey Patch ---
 
 # --- Data Structures ---
 
@@ -36,6 +105,152 @@ mcp = ConductorMCP("Conductor MCP")
 mcp.sessions = {}  # type: ignore
 
 # --- Session Management ---
+
+
+def _parse_dependency_tree(
+    tree_text: str, root_goal_id: str = None
+) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+    """
+    Parses a tree-like dependency hierarchy into a goal dependency map.
+
+    Expected format (flexible indentation and prefixes):
+    Goal: Main Goal
+    ├── Step: Sub Step 1
+    │   ├── Step: Sub Sub Step 1
+    │   └── Step: Sub Sub Step 2
+    ├── Step: Sub Step 2
+    └── Step: Sub Step 3
+
+    Args:
+        tree_text: The tree structure text
+        root_goal_id: Optional goal ID to use for the root goal instead of parsed name
+
+    Returns:
+        Tuple of (goal_dependencies dict, goal_descriptions dict)
+        goal_dependencies: Dict mapping goal IDs to their direct dependencies (steps)
+        goal_descriptions: Dict mapping goal IDs to their descriptions
+    """
+    lines = tree_text.strip().split("\n")
+    if not lines:
+        return {}, {}
+
+    # Stack to track parent goals at each indentation level
+    parent_stack = []
+    goal_dependencies = {}
+    goal_descriptions = {}
+    first_goal = True
+
+    for line in lines:
+        if not line.strip():
+            continue
+
+        # Remove tree characters and calculate indentation
+        clean_line = line.replace("├──", "").replace("└──", "").replace("│", "").strip()
+
+        # Calculate indentation more flexibly - any amount of whitespace
+        original_clean = line
+        for char in ["├", "─", "└", "│"]:
+            original_clean = original_clean.replace(char, " ")
+        indent_level = len(original_clean) - len(original_clean.lstrip())
+
+        # Extract goal name and description from various formats
+        goal_name = ""
+        description = ""
+
+        if ":" in clean_line:
+            # Split on first colon to separate prefix from content
+            parts = clean_line.split(":", 1)
+            prefix = parts[0].strip()
+            content = parts[1].strip() if len(parts) > 1 else ""
+
+            # If prefix looks like a goal type (Goal, Step, Task, etc.), use content as
+            # goal name. Otherwise, use prefix as goal name and content as description.
+            prefix_lower = prefix.lower()
+            if prefix_lower in [
+                "goal",
+                "step",
+                "task",
+                "subtask",
+                "phase",
+                "stage",
+                "final",
+            ]:
+                # Check if content has another colon for description
+                if ":" in content:
+                    goal_name, description = content.split(":", 1)
+                    goal_name = goal_name.strip()
+                    description = description.strip()
+                else:
+                    goal_name = content
+            else:
+                # Use prefix as goal name, content as description
+                goal_name = prefix
+                description = content
+        else:
+            # No colon - treat whole thing as goal name
+            goal_name = clean_line.strip()
+
+        if not goal_name:
+            continue
+
+        # Use provided root_goal_id for the first goal if specified
+        if first_goal and root_goal_id:
+            goal_id = root_goal_id
+            first_goal = False
+        else:
+            goal_id = goal_name
+
+        # Determine depth level - be more flexible with indentation
+        # Consider any indentation change as a new level
+        if indent_level == 0:
+            depth = 0
+        else:
+            # Find appropriate depth based on existing stack
+            depth = 1
+            for i, stack_indent in enumerate(
+                [0] + [4 * (j + 1) for j in range(len(parent_stack))]
+            ):
+                if indent_level <= stack_indent:
+                    depth = i
+                    break
+            else:
+                depth = len(parent_stack) + 1
+
+        # Adjust parent stack to match current depth
+        parent_stack = parent_stack[:depth]
+
+        # Initialize goal dependencies and description if not exists
+        if goal_id not in goal_dependencies:
+            goal_dependencies[goal_id] = []
+        goal_descriptions[goal_id] = description
+
+        # If we have a parent, add this goal as a step to the parent
+        if parent_stack:
+            parent_id = parent_stack[-1]
+            if parent_id not in goal_dependencies:
+                goal_dependencies[parent_id] = []
+            if goal_id not in goal_dependencies[parent_id]:
+                goal_dependencies[parent_id].append(goal_id)
+
+        # Add this goal to the parent stack for potential children
+        parent_stack.append(goal_id)
+        first_goal = False
+
+    return goal_dependencies, goal_descriptions
+
+
+def _format_description_with_period(description: str) -> str:
+    """
+    Helper function to ensure description ends with exactly one period.
+    Prevents double periods when concatenating descriptions with text that starts with
+    periods.
+    """
+    if not description:
+        return description
+    description = description.rstrip()
+    if description.endswith("."):
+        return description
+    return f"{description}."
 
 
 def get_session_state(ctx: Context) -> ServerState:
@@ -90,20 +305,104 @@ def _find_all_dependents(goal_id: str, all_goals: Dict[str, Goal]) -> Set[str]:
 def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
     """
     Defines or updates multiple goals at once, including their relationships. Accepts
-    an arbitrary dependency graph.
+    an arbitrary dependency graph with automatic goal creation for all steps.
 
     Args:
         goals: A list of dicts, each with 'id', 'description', and optional
-            'steps' (list of ids) and 'required_for' (list of ids).
+            'steps' and 'required_for' (list of ids) attributes. The 'steps' can be:
+            - List format: ["step1", "step2"] - creates goals for each step with empty
+              descriptions
+            - Tree format: Multi-line string with ASCII tree structure:
+              ```
+              Goal: Main Goal
+              ├── Step: Sub Step 1
+              │   ├── Step: Sub Sub Step 1
+              │   └── Step: Sub Sub Step 2
+              ├── Step: Sub Step 2
+              └── Step: Sub Step 3
+              ```
+              The tree format automatically creates the full goal hierarchy with proper
+              dependencies. Step names are used directly as goal IDs (preserving
+              original formatting): "Sub Step 1" becomes goal ID "Sub Step 1", "User
+              Research Completed" becomes "User Research Completed", etc. The response
+              immediately shows all auto-created goal IDs.
 
     Returns:
         A confirmation message if all goals are defined, or an error message listing
-        problematic goals and reasons. The response always includes an actionable
-        suggestion for what to do next.
+        problematic goals and reasons. All step references automatically create goals
+        with empty descriptions that can be expanded later. The response always includes
+        an actionable suggestion for what to do next.
     """
     state = get_session_state(ctx)
 
-    # First, add/update all goals in a temporary dict
+    # First, process goals and handle tree-format steps
+    processed_goals = []
+    all_tree_goals = {}  # Store goals created from tree parsing
+
+    for goal in goals:
+        processed_goal = goal.copy()
+        steps = goal.get("steps", [])
+
+        # Handle tree-format steps (string input)
+        if isinstance(steps, str) and steps.strip():
+            # Use the main goal's ID as the root goal ID
+            main_goal_id = processed_goal["id"]
+            tree_dependencies, tree_descriptions = _parse_dependency_tree(
+                steps, main_goal_id
+            )
+
+            # Create goals for all nodes in the tree, excluding the main goal
+            for goal_id, deps in tree_dependencies.items():
+                if goal_id == main_goal_id:
+                    # This is the main goal - just set its steps
+                    processed_goal["steps"] = deps
+                    # If tree has a description for main goal and main goal has no
+                    # description, use it
+                    if not processed_goal.get("description") and tree_descriptions.get(
+                        goal_id
+                    ):
+                        processed_goal["description"] = tree_descriptions[goal_id]
+                elif goal_id not in all_tree_goals:
+                    all_tree_goals[goal_id] = {
+                        "id": goal_id,
+                        "description": tree_descriptions.get(goal_id, ""),
+                        "steps": deps,
+                    }
+                else:
+                    # Merge dependencies if goal already exists
+                    existing_steps = set(all_tree_goals[goal_id]["steps"])
+                    existing_steps.update(deps)
+                    all_tree_goals[goal_id]["steps"] = list(existing_steps)
+                    # Update description if we have one from tree and none exists
+                    if not all_tree_goals[goal_id][
+                        "description"
+                    ] and tree_descriptions.get(goal_id):
+                        all_tree_goals[goal_id]["description"] = tree_descriptions[
+                            goal_id
+                        ]
+
+        # Handle list-format steps - now auto-create goals for consistency
+        elif isinstance(steps, list):
+            # Create goals for any step IDs that don't exist yet
+            existing_goal_ids = {g["id"] for g in goals}
+            for step_id in steps:
+                if (
+                    step_id not in all_tree_goals
+                    and step_id not in existing_goal_ids
+                    and step_id not in state.goals
+                ):
+                    all_tree_goals[step_id] = {
+                        "id": step_id,
+                        "description": "",
+                        "steps": [],
+                    }
+
+        processed_goals.append(processed_goal)
+
+    # Add tree-generated goals to the processed goals list
+    processed_goals.extend(all_tree_goals.values())
+
+    # Create temporary goals dict
     temp_goals = {
         gid: Goal(
             id=gid,
@@ -111,12 +410,12 @@ def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
             steps=goal.get("steps", []),
             completed=(state.goals[gid].completed if gid in state.goals else False),
         )
-        for goal in goals
+        for goal in processed_goals
         if (gid := goal["id"])
     }
 
     # Then, handle required_for relationships in the temp dict
-    for goal in goals:
+    for goal in processed_goals:
         goal_id = goal["id"]
         required_for = goal.get("required_for", [])
         for target_goal_id in required_for:
@@ -160,31 +459,45 @@ def set_goals(ctx: Context, goals: List[Dict[str, Any]]) -> str:
     # Commit temp_goals to state.goals
     state.goals.update(temp_goals)
 
-    # Check for undefined steps
-    undefined = set()
-    for goal in temp_goals.values():
-        for step in goal.steps:
-            if step not in state.goals:
-                undefined.add(step)
-    if undefined:
-        missing = ", ".join(sorted(undefined))
-        return (
-            f"Goals defined, but the following step goals are undefined: {missing}.\n"
-            f"We don't know what's involved with {missing}. Maybe you could look into "
-            "defining those as goals using set_goals."
-        )
+    # Build response with created goal information
+    response_parts = ["Goals defined."]
+
+    # Show information about auto-created goals from steps
+    original_goal_ids = {goal["id"] for goal in goals}
+    auto_created_goals = [
+        gid for gid in temp_goals.keys() if gid not in original_goal_ids
+    ]
+
+    if auto_created_goals:
+        auto_created_count = len(auto_created_goals)
+        if auto_created_count <= 5:
+            # Show all IDs if 5 or fewer
+            auto_created_list = ", ".join(sorted(auto_created_goals))
+            response_parts.append(
+                f"Auto-created {auto_created_count} step goals: {auto_created_list}"
+            )
+        else:
+            # Show count and first few if many
+            first_few = ", ".join(sorted(auto_created_goals)[:3])
+            response_parts.append(
+                f"Auto-created {auto_created_count} step goals including: "
+                f"{first_few}... (use plan_for_goal to see all)"
+            )
 
     # Suggest the first incomplete goal to focus on
     incomplete_goals = [g for g in state.goals.values() if not g.completed]
     if incomplete_goals:
         g = incomplete_goals[0]
         suggestion = (
-            f"Next, you might want to focus on {g.id}: {g.description}. You "
-            "can use plan_for_goal to see the full plan."
+            f"Next, you might want to focus on {g.id}: "
+            f"{_format_description_with_period(g.description)} You can use "
+            "plan_for_goal to see the full plan."
         )
     else:
         suggestion = "All goals are complete. If you want to add more, use set_goals."
-    return f"Goals defined.\n{suggestion}"
+
+    response_parts.append(suggestion)
+    return "\n".join(response_parts)
 
 
 @mcp.tool()
@@ -217,9 +530,6 @@ def mark_goals(
         if goal.completed:
             return
         all_steps = _get_all_steps(goal_id, state.goals)
-        undefined_steps = [p for p in all_steps if p not in state.goals]
-        for p in undefined_steps:
-            state.goals[p] = Goal(id=p, description="", steps=[], completed=True)
         for p in all_steps:
             if p in state.goals and not state.goals[p].completed:
                 _mark_goal_complete_internal(p)
@@ -241,13 +551,12 @@ def mark_goals(
 
         if completed:
             all_steps = _get_all_steps(goal_id, state.goals)
-            undefined_steps = [p for p in all_steps if p not in state.goals]
             incomplete_steps = [
                 p
                 for p in all_steps
                 if p in state.goals and not state.goals[p].completed
             ]
-            if (undefined_steps or incomplete_steps) and not complete_steps:
+            if incomplete_steps and not complete_steps:
                 results.append(
                     f"Goal '{goal_id}': You must complete all prerequisites before "
                     "marking this goal as complete. "
@@ -289,7 +598,10 @@ def mark_goals(
         incomplete_goals = [g for g in state.goals.values() if not g.completed]
         if incomplete_goals:
             g = incomplete_goals[0]
-            suggestion = f"Next, you might want to focus on {g.id}: {g.description}."
+            suggestion = (
+                f"Next, you might want to focus on {g.id}: "
+                f"{_format_description_with_period(g.description)}"
+            )
         else:
             suggestion = "All goals are complete."
         return result_message + f"\n{suggestion}"
@@ -374,7 +686,8 @@ def add_steps(ctx: Context, goal_steps: Dict[str, List[str]]) -> str:
         if incomplete_goals:
             g = incomplete_goals[0]
             suggestion = (
-                f"Next, you might want to focus on {g.id}: {g.description}. Use "
+                f"Next, you might want to focus on {g.id}: "
+                f"{_format_description_with_period(g.description)} Use "
                 "assess_goal or plan_for_goal to check the updated workflow."
             )
         else:
@@ -427,8 +740,9 @@ def plan_for_goal(
     include_diagram: bool = True,
 ) -> Dict[str, Union[List[str], str]]:
     """
-    Generates an ordered execution plan to accomplish a goal. The plan lists the goal
-    and all its steps in the required order of completion.
+    Generates an ordered execution plan to accomplish a goal. The plan lists all
+    goals in the dependency tree in the required order of completion, with clear next
+    steps.
 
     Args:
         goal_id: The ID of the final goal you want to achieve.
@@ -439,10 +753,17 @@ def plan_for_goal(
 
     Returns:
         A dictionary containing:
-        - 'plan': An ordered list of goal descriptions that must be completed. The last
-            element is always an actionable suggestion for what to do next.
+        - 'plan': An ordered list of execution steps. Each step shows either:
+            * "Complete goal: 'goal_id' - description" for well-defined goals
+            * "Define and complete goal: 'goal_id' - Details to be determined." for
+              goals that need more definition (empty descriptions)
+            The last element is always an actionable suggestion for what to do next.
         - 'diagram': A Mermaid diagram of the goal dependencies, or an empty string if
             include_diagram is False.
+
+        Goals created from step references (list or tree format) that have empty
+        descriptions will appear as "Define and complete goal" entries, prompting
+        users to expand their definitions using set_goals.
     """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
@@ -499,11 +820,16 @@ def plan_for_goal(
     for g_id in sorted_goals:
         g = state.goals.get(g_id)
         if not g:
-            steps.append(f"Define missing step goal: '{g_id}'")
-            steps.append(f"Complete steps for goal: '{g_id}'")
+            # This shouldn't happen now since we auto-create goals, but handle
+            # gracefully
             steps.append(f"Complete goal: '{g_id}' - Details to be determined.")
         elif not g.completed:
-            steps.append(f"Complete goal: '{g_id}' - {g.description}")
+            if g.description.strip():
+                steps.append(f"Complete goal: '{g_id}' - {g.description}")
+            else:
+                steps.append(
+                    f"Define and complete goal: '{g_id}' - Details to be determined."
+                )
 
     diagram = ""
     if include_diagram:
@@ -530,7 +856,7 @@ def plan_for_goal(
 
     if steps:
         first_action = steps[0]
-        if "Define missing step goal" in first_action:
+        if "Define and complete goal" in first_action:
             suggestion = (
                 "We don't know what's involved with one or more steps. Maybe you could "
                 "look into defining those as goals using set_goals."
@@ -572,15 +898,25 @@ def plan_for_goal(
 @mcp.tool()
 def assess_goal(ctx: Context, goal_id: str) -> str:
     """
-    Retrieves the current status of a goal. This provides a quick summary of its
-    completion state and whether its prerequisites are met.
+    Evaluates a goal's readiness and provides actionable guidance. Returns one of four
+    distinct status types based on the goal's current state and dependencies.
 
     Args:
         goal_id: The ID of the goal to check.
 
     Returns:
-        A human-readable string summarizing the goal's status and always including an
-        actionable suggestion for what to do next.
+        A human-readable status message with actionable guidance. Returns one of:
+
+        1. **"Goal is ready"** - No steps required or all steps completed. Ready to
+            work on.
+        2. **"Needs more definition"** - Has step goals with empty descriptions that
+            need expansion.
+        3. **"Well-defined but incomplete"** - Has defined steps but some are not yet
+            completed. Includes completion percentage and specific incomplete steps.
+        4. **"Goal is complete"** - Goal has been marked as completed.
+
+        Each status includes specific next-step recommendations (mark as complete,
+        define steps, focus on specific incomplete steps, etc.).
     """
     state = get_session_state(ctx)
     if goal_id not in state.goals:
@@ -595,12 +931,19 @@ def assess_goal(ctx: Context, goal_id: str) -> str:
             "completed work."
         )
     all_steps = _get_all_steps(goal_id, state.goals)
-    undefined_steps = sorted([p for p in all_steps if p not in state.goals])
-    if undefined_steps:
-        missing = ", ".join(undefined_steps)
+    # Check if any step goals have empty descriptions (need more definition)
+    empty_desc_steps = sorted(
+        [
+            p
+            for p in all_steps
+            if p in state.goals and not state.goals[p].description.strip()
+        ]
+    )
+    if empty_desc_steps:
+        missing = ", ".join(empty_desc_steps)
         return (
-            f"The goal has undefined step goals: {missing}. More work is required to "
-            f"properly define the goal.\nWe don't know what's involved with {missing}. "
+            f"The goal has step goals that need more definition: {missing}. "
+            f"We don't know what's involved with {missing}. "
             "Maybe you could look into defining those as goals using set_goals."
         )
     all_goals_in_workflow = all_steps.union({goal_id})

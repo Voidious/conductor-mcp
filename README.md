@@ -112,12 +112,39 @@ python main.py
 
 ### Usage Rules for AI-Assisted Coding Editors
 
-For best results with Conductor MCP, load the file [conductor-rules.md](./conductor-rules.md) into your AI-assisted coding editor (such as Cursor or Windsurf) as rules. This enables your coding assistant to follow best practices and use Conductor MCP efficiently and effectively. You may also read the file if you wish, but its main purpose is to serve as a ruleset for your coding assistant.
+For best results with Conductor MCP, load the file [conductor-rules.md](./docs/conductor-rules.md) into your AI-assisted coding editor (such as Cursor or Windsurf) as rules. This enables your coding assistant to follow best practices and use Conductor MCP efficiently and effectively. You may also read the file if you wish, but its main purpose is to serve as a ruleset for your coding assistant.
 
 ## Available Tools
 You can interact with the server using the following tools:
 
-- `set_goals(goals: List[Dict])`: Defines or updates multiple goals at once, including their relationships. Accepts an arbitrary dependency graph. If there are cycles in the graph, it will return an error message listing the problematic goal IDs. If any steps are undefined, it will return a warning listing them. Each goal can have optional `steps` (list of ids) and `required_for` (list of ids) attributes. Example usage:
+- `set_goals(goals: List[Dict])`: Defines or updates multiple goals at once, including their relationships. Accepts an arbitrary dependency graph with automatic goal creation for all steps. If there are cycles in the graph, it will return an error message listing the problematic goal IDs. Each goal can have optional `steps` and `required_for` (list of ids) attributes. The `steps` parameter supports two formats:
+
+  **List Format** - Creates goals automatically for each step:
+  ```python
+  {"id": "parent", "description": "Parent goal", "steps": ["step1", "step2"]}
+  ```
+  
+  **Tree Format** - Define complex hierarchies with ASCII tree structure:
+  ```python
+  {"id": "launch", "description": "Launch product", "steps": """Goal: Launch New Product
+├── Step: Finalize Product Design
+│   ├── Step: User Research Completed
+│   └── Step: Design Mockups Approved
+├── Step: Develop Marketing Strategy
+│   ├── Step: Market Analysis Done
+│   └── Step: Marketing Team Assembled
+└── Step: Secure Funding
+    ├── Step: Business Plan Approved
+    └── Step: Investor Pitches Conducted"""}
+  ```
+  
+  The tree format uses step names directly as goal IDs (preserving original formatting):
+  - `"User Research Completed"` becomes goal ID `"User Research Completed"`
+  - `"Market Analysis Done"` becomes goal ID `"Market Analysis Done"`
+  
+  The `set_goals` response shows all auto-created goal IDs immediately.
+
+  Example usage:
 
     ```python
     set_goals([
@@ -146,33 +173,50 @@ You can interact with the server using the following tools:
     ])
     # Returns: "Deadlock detected in steps. The following goals could not be created due to deadlocks: x, y. Review your goal dependencies to remove cycles, then try again."
     ```
-    If you include undefined steps:
+    Steps are automatically created as goals with empty descriptions:
     ```python
     set_goals([
-        {"id": "z", "description": "Z", "steps": ["not_defined"]},
+        {"id": "z", "description": "Z", "steps": ["auto_created_step"]},
     ])
-    # Returns: "Goals defined, but the following step goals are undefined: not_defined. We don't know what's involved with not_defined. Maybe you could look into defining those as goals using set_goals."
+    # Returns: "Goals defined. Next, you might want to focus on z: Z. You can use plan_for_goal to see the full plan."
+    # The step "auto_created_step" is automatically created as a goal with an empty description
     ```
 - `add_steps(goal_steps: Dict[str, List[str]])`: Adds steps to multiple goals, with different steps for each goal. Takes a dictionary mapping goal IDs to lists of step IDs.
 - `plan_for_goal(goal_id: str, max_steps: Optional[int] = None, include_diagram: bool = True)`: Generates an ordered execution plan and, optionally, a Mermaid diagram of the dependency graph. It returns a dictionary with two keys: `plan` (a list of steps) and `diagram` (a string with the Mermaid diagram, or an empty string if `include_diagram` is `False`).
 - `mark_goals(goal_ids: List[str], completed: bool = True, complete_steps: bool = False)`: Marks multiple goals as completed or incomplete. If this goal was a step for other goals, it will suggest focusing on all now-unblocked goals (listing all dependents if there are multiple).
-- `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state and whether its steps are met. It returns one of four statuses:
+- `assess_goal(goal_id: str)`: Retrieves the current status of a goal. This provides a quick summary of its completion state, step prerequisites, and definition completeness. It returns one of four statuses:
     1. The goal is complete.
     2. The goal is ready because all step goals have been met.
     3. The goal is well-defined, but some steps are not yet complete.
-    4. The goal has undefined steps and requires more definition.
+    4. The goal has step goals that need more definition (empty descriptions).
 
 ### Example Workflow
 
 Here is a simple example of how to use the tools to manage a plan:
 
-1.  **Define all your goals**:
+1.  **Define your goals using list format**:
     ```python
     set_goals([
         {"id": "read_docs", "description": "Read the FastMCP documentation"},
         {"id": "build_server", "description": "Build a simple MCP server", "steps": ["read_docs"]},
         {"id": "test_server", "description": "Test the server with a client", "steps": ["build_server"]},
         {"id": "learn_mcp", "description": "Learn the Model Context Protocol", "steps": ["test_server"]}
+    ])
+    ```
+
+    **Or use tree format for complex hierarchies**:
+    ```python
+    set_goals([
+        {"id": "learn_mcp", "description": "Learn the Model Context Protocol", "steps": """Goal: Learn MCP
+├── Step: Read Documentation
+│   ├── Step: Read FastMCP Docs
+│   └── Step: Read MCP Specification
+├── Step: Build Server
+│   ├── Step: Set Up Environment
+│   └── Step: Implement Basic Tools
+└── Step: Test Implementation
+    ├── Step: Unit Tests
+    └── Step: Integration Tests"""}
     ])
     ```
 2.  **Check if your top-level goal is feasible**: `assess_goal(goal_id="learn_mcp")` -> Returns a message indicating the goal is well-defined but has incomplete steps, along with a completion summary.
