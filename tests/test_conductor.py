@@ -810,3 +810,371 @@ async def test_http_server_basic():
             proc.wait(timeout=5)
         except Exception:
             proc.kill()
+
+
+@pytest.mark.asyncio
+async def test_format_description_with_period() -> None:
+    """Tests the _format_description_with_period helper function."""
+    assert main._format_description_with_period("test") == "test."
+    assert main._format_description_with_period("test.") == "test."
+    assert main._format_description_with_period("test. ") == "test."
+    assert main._format_description_with_period("") == ""
+
+
+@pytest.mark.asyncio
+async def test_parse_dependency_tree() -> None:
+    """Tests the _parse_dependency_tree function."""
+    tree_text = """
+    Goal: Main
+        Step: Sub1
+            Step: SubSub1
+    """
+    deps, descs = main._parse_dependency_tree(tree_text)
+    assert "Main" in deps
+    assert "Sub1" in deps["Main"]
+    assert "SubSub1" in deps["Sub1"]
+    assert descs["Main"] == ""
+
+    tree_text_with_desc = """
+    Goal: Main: The main goal
+        Step: Sub1: The first sub-goal
+    """
+    deps, descs = main._parse_dependency_tree(tree_text_with_desc)
+    assert descs["Main"] == "The main goal"
+    assert descs["Sub1"] == "The first sub-goal"
+
+    deps, descs = main._parse_dependency_tree("")
+    assert deps == {}
+    assert descs == {}
+
+
+@pytest.mark.asyncio
+async def test_set_goals_with_tree_description(client: Client) -> None:
+    """Tests set_goals with a tree that has a description for the root goal."""
+    tree_text = "Goal: Root: The root description"
+    await client.call_tool(
+        "set_goals",
+        {
+            "goals": [
+                {
+                    "id": "root",
+                    "description": "",
+                    "steps": tree_text,
+                }
+            ]
+        },
+    )
+    result = await client.call_tool("assess_goal", {"goal_id": "root"})
+    assert "The root description" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_mark_goals_already_incomplete(client: Client) -> None:
+    """Tests marking a goal as incomplete when it's already incomplete."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    await client.call_tool("mark_goals", {"goal_ids": ["goal1"], "completed": False})
+    result = await client.call_tool(
+        "mark_goals", {"goal_ids": ["goal1"], "completed": False}
+    )
+    assert "Goal 'goal1' was already incomplete" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_plan_for_goal_undefined_goal(client: Client) -> None:
+    """Tests plan_for_goal with a goal that doesn't exist."""
+    result = await client.call_tool("plan_for_goal", {"goal_id": "nonexistent"})
+    data = json.loads(result[0].text)
+    assert "Goal 'nonexistent' not found" in data["plan"][0]
+
+
+@pytest.mark.asyncio
+async def test_assess_goal_all_steps_complete(client: Client) -> None:
+    """Tests assess_goal when all prerequisite steps for a goal are complete."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "step1", "description": "Step 1"}]}
+    )
+    await client.call_tool(
+        "set_goals",
+        {
+            "goals": [
+                {
+                    "id": "main_goal",
+                    "description": "Main Goal",
+                    "steps": ["step1"],
+                }
+            ]
+        },
+    )
+    await client.call_tool("mark_goals", {"goal_ids": ["step1"]})
+    result = await client.call_tool("assess_goal", {"goal_id": "main_goal"})
+    assert "All step goals are met" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_get_session_state_with_id(client: Client) -> None:
+    """Tests get_session_state with a session that has an id."""
+    import unittest.mock as mock
+
+    with mock.patch("main.get_session_state") as mock_get_state:
+        # Mock two different session states
+        state1 = main.ServerState()
+        state2 = main.ServerState()
+
+        def side_effect(ctx):
+            if hasattr(ctx, "session") and hasattr(ctx.session, "id"):
+                return state1 if ctx.session.id == "session1" else state2
+            return state1
+
+        mock_get_state.side_effect = side_effect
+
+        # Create mock contexts
+        class MockSession:
+            def __init__(self, session_id):
+                self.id = session_id
+
+        class MockContext:
+            def __init__(self, session_id):
+                self.session = MockSession(session_id)
+
+        ctx1 = MockContext("session1")
+        ctx2 = MockContext("session2")
+
+        result1 = main.get_session_state(ctx1)
+        result2 = main.get_session_state(ctx2)
+
+        assert result1 is not result2
+
+
+@pytest.mark.asyncio
+async def test_set_goals_many_auto_created(client: Client) -> None:
+    """Tests the suggestion when more than 5 goals are auto-created."""
+    steps = [f"step{i}" for i in range(6)]
+    result = await client.call_tool(
+        "set_goals",
+        {"goals": [{"id": "main", "description": "Main", "steps": steps}]},
+    )
+    assert "Auto-created 6 step goals including:" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_mark_goals_no_dependents_suggestion(client: Client) -> None:
+    """Tests the suggestion from mark_goals when there are no dependents."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal2", "description": "Goal 2"}]}
+    )
+    result = await client.call_tool("mark_goals", {"goal_ids": ["goal1"]})
+    assert "Next, you might want to focus on goal2" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_add_steps_no_affected_suggestion(client: Client) -> None:
+    """Tests the suggestion from add_steps when no completed goals are affected."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal2", "description": "Goal 2"}]}
+    )
+    result = await client.call_tool("add_steps", {"goal_steps": {"goal1": ["goal2"]}})
+    assert "Next, you might want to focus on goal1" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_plan_for_goal_all_complete_suggestion(client: Client) -> None:
+    """Tests the suggestion from plan_for_goal when all goals are complete."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    await client.call_tool("mark_goals", {"goal_ids": ["goal1"]})
+    result = await client.call_tool("plan_for_goal", {"goal_id": "goal1"})
+    data = json.loads(result[0].text)
+    assert "already completed" in data["plan"][0]
+
+
+@pytest.mark.asyncio
+async def test_assess_goal_no_incomplete_steps(client: Client) -> None:
+    """Tests assess_goal when there are no incomplete steps."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    result = await client.call_tool("assess_goal", {"goal_id": "goal1"})
+    assert "All step goals are met" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_parse_dependency_tree_flexible_indent() -> None:
+    """Tests the _parse_dependency_tree function with flexible indentation."""
+    tree_text = """
+    Goal: Main
+      Step: Sub1
+        Step: SubSub1
+    """
+    deps, _ = main._parse_dependency_tree(tree_text)
+    assert "Sub1" in deps["Main"]
+    assert "SubSub1" in deps["Sub1"]
+
+
+@pytest.mark.asyncio
+async def test_mark_goals_incomplete_steps_no_override(client: Client) -> None:
+    """Tests marking a goal with incomplete steps and complete_steps=False."""
+    await client.call_tool(
+        "set_goals",
+        {
+            "goals": [
+                {"id": "step1", "description": "Step 1"},
+                {
+                    "id": "main_goal",
+                    "description": "Main Goal",
+                    "steps": ["step1"],
+                },
+            ]
+        },
+    )
+    result = await client.call_tool("mark_goals", {"goal_ids": ["main_goal"]})
+    assert "You must complete all prerequisites" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_add_steps_self_as_step(client: Client) -> None:
+    """Tests adding a goal to itself as a step."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    result = await client.call_tool("add_steps", {"goal_steps": {"goal1": ["goal1"]}})
+    assert "cannot have itself as a step" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_has_cycle() -> None:
+    """Tests the _has_cycle utility."""
+    graph = {"a": ["b"], "b": ["a"]}
+    assert main._has_cycle(set(graph.keys()), graph.get)
+
+
+@pytest.mark.asyncio
+async def test_find_cycle_nodes() -> None:
+    """Tests the _find_cycle_nodes utility."""
+    graph = {"a": ["b"], "b": ["a"]}
+    cycle_nodes = main._find_cycle_nodes(set(graph.keys()), graph.get)
+    assert "a" in cycle_nodes
+    assert "b" in cycle_nodes
+
+
+@pytest.mark.asyncio
+async def test_parse_dependency_tree_edge_cases() -> None:
+    """Tests _parse_dependency_tree with edge cases like empty lines and names."""
+    # Test with a blank line
+    tree_with_blank_line = """
+    Goal: Main
+
+    Step: Sub1
+    """
+    deps, _ = main._parse_dependency_tree(tree_with_blank_line)
+    assert "Sub1" in deps["Main"]
+
+    # Test with a line that results in an empty goal name
+    tree_with_empty_name = """
+    Goal: Main
+    Step:
+    """
+    deps, _ = main._parse_dependency_tree(tree_with_empty_name)
+    assert "Main" in deps
+    assert not deps["Main"]  # No steps should be added
+
+
+@pytest.mark.asyncio
+async def test_mark_goals_complete_steps_deep(client: Client) -> None:
+    """Tests the complete_steps=True flag with a deep dependency chain."""
+    goals = [
+        {"id": "g1", "description": "G1"},
+        {"id": "g2", "description": "G2", "steps": ["g1"]},
+        {"id": "g3", "description": "G3", "steps": ["g2"]},
+    ]
+    await client.call_tool("set_goals", {"goals": goals})
+    # Mark g3 as complete, which should complete g1 and g2 as well
+    await client.call_tool("mark_goals", {"goal_ids": ["g3"], "complete_steps": True})
+    for goal_id in ["g1", "g2", "g3"]:
+        result = await client.call_tool("assess_goal", {"goal_id": goal_id})
+        assert "complete" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_add_steps_marks_dependents_incomplete(client: Client) -> None:
+    """
+    Tests that adding a step to a completed goal marks its dependents as incomplete.
+    """
+    goals = [
+        {"id": "g1", "description": "G1"},
+        {"id": "g2", "description": "G2", "steps": ["g1"]},
+        {"id": "g3", "description": "G3"},
+    ]
+    await client.call_tool("set_goals", {"goals": goals})
+    # Complete g1 and g2
+    await client.call_tool("mark_goals", {"goal_ids": ["g1", "g2"]})
+    # Add g3 as a step to g1, which should make g2 incomplete
+    await client.call_tool("add_steps", {"goal_steps": {"g1": ["g3"]}})
+    result = await client.call_tool("assess_goal", {"goal_id": "g2"})
+    assert "incomplete" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_set_goals_suggestion_with_mixed_completion(client: Client) -> None:
+    """
+    Tests the suggestion from set_goals when the state has both complete and
+    incomplete goals.
+    """
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    await client.call_tool("mark_goals", {"goal_ids": ["goal1"]})
+    result = await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal2", "description": "Goal 2"}]}
+    )
+    # The suggestion should be to focus on the new, incomplete goal.
+    assert "Next, you might want to focus on goal2" in result[0].text
+
+
+@pytest.mark.asyncio
+async def test_add_steps_cycle_detection(client: Client) -> None:
+    """Tests that add_steps correctly detects and prevents a cycle."""
+    await client.call_tool("set_goals", {"goals": [{"id": "x", "description": "X"}]})
+    await client.call_tool("set_goals", {"goals": [{"id": "y", "description": "Y"}]})
+
+    # Add dependency y -> x
+    await client.call_tool("add_steps", {"goal_steps": {"x": ["y"]}})
+
+    # Attempt to add dependency x -> y, which should create a cycle
+    result = await client.call_tool("add_steps", {"goal_steps": {"y": ["x"]}})
+
+    # Verify that the deadlock was detected and reported
+    assert "would create a deadlock" in result[0].text
+
+    # Verify that the cyclic step was not actually added to goal 'y'
+    assess_result = await client.call_tool("assess_goal", {"goal_id": "y"})
+    assert "ready" in assess_result[0].text  # 'y' should still be ready, with no steps
+
+
+@pytest.mark.asyncio
+async def test_plan_for_goal_all_steps_complete_suggestion(client: Client) -> None:
+    """Tests the suggestion when a plan is requested for a completed goal."""
+    await client.call_tool(
+        "set_goals", {"goals": [{"id": "goal1", "description": "Goal 1"}]}
+    )
+    await client.call_tool("mark_goals", {"goal_ids": ["goal1"]})
+    result = await client.call_tool("plan_for_goal", {"goal_id": "goal1"})
+    data = json.loads(result[0].text)
+    assert "already completed" in data["plan"][0]
+
+
+@pytest.mark.asyncio
+async def test_cycle_detection_longer_cycle() -> None:
+    """Tests the cycle detection with a longer cycle."""
+    graph = {"a": ["b"], "b": ["c"], "c": ["a"]}
+    assert main._has_cycle(set(graph.keys()), graph.get)
+    cycle_nodes = main._find_cycle_nodes(set(graph.keys()), graph.get)
+    assert cycle_nodes == {"a", "b", "c"}
